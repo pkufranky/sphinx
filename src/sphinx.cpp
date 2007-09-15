@@ -14,6 +14,7 @@
 #include "sphinx.h"
 #include "sphinxstem.h"
 #include "sphinxquery.h"
+#include "sphinxutils.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -10744,6 +10745,7 @@ struct CSphDictCRC : CSphDict
 	virtual SphWordID_t	GetWordID ( BYTE * pWord );
 	virtual SphWordID_t	GetWordID ( const BYTE * pWord, int iLen );
 	virtual void		LoadStopwords ( const char * sFiles, ISphTokenizer * pTokenizer );
+	virtual bool		LoadWordforms ( const char * szFile );
 	virtual bool		SetMorphology ( const CSphVariant * sMorph, bool bUseUTF8, CSphString & sError );
 
 protected:
@@ -10755,7 +10757,12 @@ protected:
 	int					m_iStopwords;	///< stopwords count
 	SphWordID_t *		m_pStopwords;	///< stopwords ID list
 
+	typedef CSphOrderedHash < int, CSphString, CSphStrHashFunc, 1048576, 117 > CWordHash;
+	CWordHash *			m_pWordHash;	///< wordforms 
+	CSphVector < CSphString > m_dNormalForms; ///< normal word forms
+	
 protected:
+	bool				ToNormalForm ( BYTE * pWord );
 	SphWordID_t			FilterStopword ( SphWordID_t uID );	///< filter ID against stopwords list
 };
 
@@ -10884,6 +10891,7 @@ SphOffset_t sphFNV64 ( const BYTE * s, int iLen )
 
 CSphDictCRC::CSphDictCRC ()
 	: m_iMorph		( 0 )
+	, m_pWordHash	( NULL )
 #if USE_LIBSTEMMER
 	, m_pStemmer	( NULL )
 #endif
@@ -10896,6 +10904,8 @@ CSphDictCRC::CSphDictCRC ()
 
 CSphDictCRC::~CSphDictCRC ()
 {
+	delete m_pWordHash;
+
 #if USE_LIBSTEMMER
 	sb_stemmer_delete ( m_pStemmer );
 #endif
@@ -10932,6 +10942,30 @@ SphWordID_t CSphDictCRC::FilterStopword ( SphWordID_t uID )
 	return uID;
 }
 
+
+bool CSphDictCRC::ToNormalForm ( BYTE * pWord )
+{
+	if ( ! m_pWordHash )
+		return false;
+
+	if ( m_pWordHash )
+	{
+		int * pIndex = (*m_pWordHash) ( (char *)pWord );
+		if ( ! pIndex )
+			return false;
+
+		if ( *pIndex < 0 || *pIndex >= m_dNormalForms.GetLength () )
+			return false;
+
+		if ( m_dNormalForms [*pIndex].IsEmpty () )
+			return false;
+
+		strcpy ( (char *)pWord, m_dNormalForms [*pIndex].cstr () );
+	}
+
+	return false;
+}
+
 /////////////////////////////////////////////////////////////////////////////
 
 template < typename T > T sphCRCWord ( const BYTE * pWord );
@@ -10945,30 +10979,33 @@ template<> DWORD sphCRCWord ( const BYTE * pWord, int iLen ) { return sphCRC32 (
 
 SphWordID_t CSphDictCRC::GetWordID ( BYTE * pWord )
 {
-	if ( m_iMorph & SPH_MORPH_STEM_EN )
-		stem_en ( pWord );
-
-	if ( m_iMorph & SPH_MORPH_STEM_RU_CP1251 )
-		stem_ru_cp1251 ( pWord );
-
-	if ( m_iMorph & SPH_MORPH_STEM_RU_UTF8 )
-		stem_ru_utf8 ( (WORD*)pWord );
-
-	if ( m_iMorph & SPH_MORPH_SOUNDEX )
-		stem_soundex ( pWord );
-
-#if USE_LIBSTEMMER
-	if ( m_iMorph & SPH_MORPH_LIBSTEMMER )
+	if ( ! ToNormalForm ( pWord ) )
 	{
-		assert ( m_pStemmer );
+		if ( m_iMorph & SPH_MORPH_STEM_EN )
+			stem_en ( pWord );
 
-		const sb_symbol * sStemmed = sb_stemmer_stem ( m_pStemmer, (sb_symbol*)pWord, strlen((const char*)pWord) );
-		int iLen = sb_stemmer_length ( m_pStemmer );
+		if ( m_iMorph & SPH_MORPH_STEM_RU_CP1251 )
+			stem_ru_cp1251 ( pWord );
 
-		memcpy ( pWord, sStemmed, iLen );
-		pWord[iLen] = '\0';		
+		if ( m_iMorph & SPH_MORPH_STEM_RU_UTF8 )
+			stem_ru_utf8 ( (WORD*)pWord );
+
+		if ( m_iMorph & SPH_MORPH_SOUNDEX )
+			stem_soundex ( pWord );
+
+	#if USE_LIBSTEMMER
+		if ( m_iMorph & SPH_MORPH_LIBSTEMMER )
+		{
+			assert ( m_pStemmer );
+
+			const sb_symbol * sStemmed = sb_stemmer_stem ( m_pStemmer, (sb_symbol*)pWord, strlen((const char*)pWord) );
+			int iLen = sb_stemmer_length ( m_pStemmer );
+
+			memcpy ( pWord, sStemmed, iLen );
+			pWord[iLen] = '\0';		
+		}
+	#endif
 	}
-#endif
 
 	return FilterStopword ( sphCRCWord<SphWordID_t> ( pWord ) );
 }
@@ -11059,6 +11096,49 @@ void CSphDictCRC::LoadStopwords ( const char * sFiles, ISphTokenizer * pTokenize
 }
 
 
+bool CSphDictCRC::LoadWordforms ( const char * szFile )
+{
+	assert ( ! m_pWordHash );
+
+	if ( ! szFile )
+		return false;
+
+	FILE * pFile = fopen ( szFile, "rt" );
+	if ( ! pFile )
+		return false;
+
+	m_pWordHash = new CWordHash;
+	if ( ! m_pWordHash )
+		return false;
+
+	const int MAX_WORD_LENGTH = 512;
+	char szBuffer	[MAX_WORD_LENGTH];
+	char szWord		[MAX_WORD_LENGTH];
+	char szNormal	[MAX_WORD_LENGTH];
+
+	bool bOk = true;
+
+	while ( ! feof ( pFile ) && bOk )
+	{
+		if ( ! fgets ( szBuffer, MAX_WORD_LENGTH, pFile ) )
+			bOk = !!feof ( pFile );
+		else
+		{
+			int nRead = sscanf ( szBuffer, "%s > %s", szWord, szNormal );
+			if ( nRead == 2 )
+			{
+				m_dNormalForms.AddUnique ( szNormal );
+				m_pWordHash->Add ( m_dNormalForms.GetLength () - 1 , szWord );
+			}
+		}
+	}
+
+	fclose ( pFile );
+
+	return bOk;
+}
+
+
 bool CSphDictCRC::SetMorphology ( const CSphVariant * sMorph, bool bUseUTF8, CSphString & sError )
 {
 	m_iMorph = 0;
@@ -11135,9 +11215,21 @@ bool CSphDictCRC::SetMorphology ( const CSphVariant * sMorph, bool bUseUTF8, CSp
 }
 
 
-CSphDict * sphCreateDictionaryCRC ()
+CSphDict * sphCreateDictionaryCRC ( const CSphVariant * pMorph, const char * szStopwords, const char * szWordforms, ISphTokenizer * pTokenizer, CSphString & sError )
 {
-	return new CSphDictCRC ();
+	assert ( pTokenizer );
+
+	CSphDict * pDict = new CSphDictCRC ();
+	if ( ! pDict  )
+		return NULL;
+
+	if ( pDict->SetMorphology ( pMorph, pTokenizer->IsUtf8(), sError ) )
+		sError = "";
+
+	pDict->LoadStopwords ( szStopwords, pTokenizer );
+	pDict->LoadWordforms ( szWordforms );
+
+	return pDict;
 }
 
 /////////////////////////////////////////////////////////////////////////////

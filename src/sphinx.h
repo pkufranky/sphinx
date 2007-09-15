@@ -327,13 +327,16 @@ struct CSphDict
 	/// load stopwords from given files
 	virtual void		LoadStopwords ( const char * sFiles, ISphTokenizer * pTokenizer ) = 0;
 
+	/// load wordforms from a given file 
+	virtual bool		LoadWordforms ( const char * szFile ) { return false; }
+
 	/// set morphology
 	virtual bool		SetMorphology ( const CSphVariant * sMorph, bool bUseUTF8, CSphString & sError ) = 0;
 };
 
 
 /// dictionary factory
-CSphDict *				sphCreateDictionaryCRC ();
+CSphDict * sphCreateDictionaryCRC ( const CSphVariant * pMorph, const char * szStopwords, const char * szWordforms, ISphTokenizer * pTokenizer, CSphString & sError );
 
 /////////////////////////////////////////////////////////////////////////////
 // DATASOURCES
