@@ -10891,21 +10891,19 @@ SphOffset_t sphFNV64 ( const BYTE * s, int iLen )
 
 CSphDictCRC::CSphDictCRC ()
 	: m_iMorph		( 0 )
-	, m_pWordHash	( NULL )
 #if USE_LIBSTEMMER
 	, m_pStemmer	( NULL )
 #endif
-
 	, m_iStopwords	( 0 )
 	, m_pStopwords	( NULL )
+	, m_pWordHash	( NULL )
 {
 }
 
 
 CSphDictCRC::~CSphDictCRC ()
 {
-	delete m_pWordHash;
-
+	SafeDelete ( m_pWordHash );
 #if USE_LIBSTEMMER
 	sb_stemmer_delete ( m_pStemmer );
 #endif
