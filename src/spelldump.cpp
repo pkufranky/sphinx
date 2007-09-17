@@ -412,6 +412,7 @@ public:
 	CISpellAffixRule * GetRule ( int iRule );
 	int			GetNumRules () const;
 	bool		HaveCharset () const;
+	bool		CheckCrosses () const;
 
 private:
 	CSphVector < CISpellAffixRule > m_dRules;
@@ -419,6 +420,7 @@ private:
 	char		m_dCharset [256];
 	bool		m_bFirstCaseConv;
 	CSphString	m_sLocale;
+	bool		m_bCheckCrosses;
 
 	bool		AddToCharset ( char * szRangeL, char * szRangeU );
 	void		AddCharPair ( char cCharL, char cCharU );
@@ -429,7 +431,8 @@ private:
 
 
 CISpellAffix::CISpellAffix ( const char * szLocale )
-	: m_sLocale ( szLocale )
+	: m_sLocale			( szLocale )
+	, m_bCheckCrosses	( false )
 {
 }
 
@@ -566,6 +569,18 @@ bool CISpellAffix::Load (  const char * szFilename )
 
 	fclose ( pFile );
 
+	bool bHaveCrossPrefix = false;
+	for ( int i = 0; i < m_dRules.GetLength () && !bHaveCrossPrefix; ++i )
+		if ( m_dRules [i].IsPrefix () && m_dRules [i].IsCrossProduct () )
+			bHaveCrossPrefix = true;
+
+	bool bHaveCrossSuffix = false;
+	for ( int i = 0; i < m_dRules.GetLength () && !bHaveCrossSuffix; ++i )
+		if ( !m_dRules [i].IsPrefix () && m_dRules [i].IsCrossProduct () )
+			bHaveCrossSuffix = true;
+
+	m_bCheckCrosses = bHaveCrossPrefix && bHaveCrossSuffix;
+
 	return true;
 }
 
@@ -589,6 +604,12 @@ bool CISpellAffix::HaveCharset () const
 			return true;
 
 	return false;
+}
+
+
+bool CISpellAffix::CheckCrosses () const
+{
+	return m_bCheckCrosses;
 }
 
 
@@ -777,6 +798,9 @@ int main ( int argc, char ** argv )
 					fprintf ( pResultFile, "%s > %s\n", sWord.cstr (), pWord->m_sWord.cstr () );
 
 					// apply other rules
+					if ( ! Affix.CheckCrosses () )
+						continue;
+
 					if ( ! pRule1->IsCrossProduct () )
 						continue;
 
