@@ -119,54 +119,49 @@ bool CISpellDict::Load ( const char * szFilename )
 
 	char szWordBuffer [MAX_STR_LENGTH];
 
-	bool bOk = true;
-
-	while ( !feof ( pFile ) && bOk )
+	while ( !feof ( pFile ) )
 	{
 		char * szResult = fgets ( szWordBuffer, MAX_STR_LENGTH, pFile );
-		if ( !szResult && !feof ( pFile ) )
-			bOk = false;
+		if ( !szResult )
+			break;
+
+		int iPos = strlen ( szWordBuffer ) - 1;
+		while ( iPos >= 0 && isspace ( (unsigned char)szWordBuffer [iPos] ) )
+			szWordBuffer [iPos--] = '\0';
+
+		CISpellDictWord Word;
+
+		char * szPosition = strchr ( szWordBuffer, '/' );
+		if ( !szPosition )
+		{
+			szPosition = szWordBuffer;
+			while ( *szPosition && !isspace ( (unsigned char)*szPosition ) )
+				++szPosition;
+
+			*szPosition = '\0';
+			Word.m_sWord = szWordBuffer;
+		}
 		else
 		{
-			int iPos = strlen ( szWordBuffer ) - 1;
-			while ( iPos >= 0 && isspace ( (unsigned char)szWordBuffer [iPos] ) )
-				szWordBuffer [iPos--] = '\0';
-
-			CISpellDictWord Word;
-
-			char * szPosition = strchr ( szWordBuffer, '/' );
-			if ( !szPosition )
-			{
-				szPosition = szWordBuffer;
-				while ( *szPosition && !isspace ( (unsigned char)*szPosition ) )
-					++szPosition;
-
-				*szPosition = '\0';
-				Word.m_sWord = szWordBuffer;
-			}
-			else
-			{
-				*szPosition = '\0';
-				Word.m_sWord = szWordBuffer;
+			*szPosition = '\0';
+			Word.m_sWord = szWordBuffer;
+			++szPosition;
+			char * szFlags = szPosition;
+			while ( *szPosition && !isspace ( (unsigned char)*szPosition ) )
 				++szPosition;
-				char * szFlags = szPosition;
-				while ( *szPosition && !isspace ( (unsigned char)*szPosition ) )
-					++szPosition;
 
-				*szPosition = '\0';
-				Word.m_sFlags = szFlags;
-			}
-
-			m_dEntries.Add ( Word );
+			*szPosition = '\0';
+			Word.m_sFlags = szFlags;
 		}
+
+		m_dEntries.Add ( Word );
 	}
 
 	fclose ( pFile );
 
-	if ( bOk )
-		m_dEntries.Sort ( DictWordLess () );
+	m_dEntries.Sort ( DictWordLess () );
 
-	return bOk;
+	return true;
 }
 
 
@@ -457,20 +452,16 @@ bool CISpellAffix::Load (  const char * szFilename )
 	char szStrip	 [MAX_STR_LENGTH];
 	char szAppend    [MAX_STR_LENGTH];
 
-	bool bOk = true;
 	RuleType_e eRule = RULE_NONE;
 	char cFlag = '\0';
 	bool bCrossProduct = false;
 
 	// TODO: parse all .aff character replacement commands
-	while ( !feof ( pFile ) && bOk )
+	while ( !feof ( pFile ) )
 	{
 		char * szResult = fgets ( szBuffer, MAX_STR_LENGTH, pFile );
-		if ( !szResult && !feof ( pFile ) )
-		{
-			bOk = false;
+		if ( !szResult )
 			break;
-		}
 
 		if ( !strncasecmp ( szBuffer, "prefixes", 8 ) )
 		{
@@ -575,7 +566,7 @@ bool CISpellAffix::Load (  const char * szFilename )
 
 	fclose ( pFile );
 
-	return bOk;
+	return true;
 }
 
 
