@@ -10732,7 +10732,8 @@ enum
 	SPH_MORPH_STEM_RU_CP1251	= (1UL<<2),
 	SPH_MORPH_STEM_RU_UTF8		= (1UL<<3),
 	SPH_MORPH_SOUNDEX			= (1UL<<4),
-	SPH_MORPH_LIBSTEMMER		= (1UL<<5)
+	SPH_MORPH_LIBSTEMMER		= (1UL<<5),
+	SPH_MORPH_STEM_CZ			= (1UL<<6)
 };
 
 
@@ -10988,6 +10989,9 @@ SphWordID_t CSphDictCRC::GetWordID ( BYTE * pWord )
 		if ( m_iMorph & SPH_MORPH_STEM_RU_UTF8 )
 			stem_ru_utf8 ( (WORD*)pWord );
 
+		if ( m_iMorph & SPH_MORPH_STEM_CZ )
+			stem_cz ( pWord );
+
 		if ( m_iMorph & SPH_MORPH_SOUNDEX )
 			stem_soundex ( pWord );
 
@@ -11159,6 +11163,7 @@ bool CSphDictCRC::SetMorphology ( const CSphVariant * sMorph, bool bUseUTF8, CSp
 	} else if ( sOption=="stem_en" )
 	{
 		m_iMorph = SPH_MORPH_STEM_EN;
+		stem_en_init ();
 
 	} else if ( sOption=="stem_ru" )
 	{
@@ -11168,7 +11173,13 @@ bool CSphDictCRC::SetMorphology ( const CSphVariant * sMorph, bool bUseUTF8, CSp
 	} else if ( sOption=="stem_enru" )
 	{
 		m_iMorph = iStemRu | SPH_MORPH_STEM_EN;
+		stem_en_init ();
 		stem_ru_init ();
+
+	} else if ( sOption=="stem_cz" )
+	{
+		m_iMorph = SPH_MORPH_STEM_CZ;
+		stem_cz_init ();
 
 	} else if ( sOption=="soundex" )
 	{
