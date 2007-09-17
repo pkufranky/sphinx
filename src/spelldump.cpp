@@ -198,14 +198,17 @@ class CISpellAffixRule
 {
 public:
 				CISpellAffixRule () {};
-				CISpellAffixRule ( RuleType_e eRule, char cFlag, char * szCondition, char * szStrip, char * szAppend );
+				CISpellAffixRule ( RuleType_e eRule, char cFlag, bool bCrossProduct, char * szCondition, char * szStrip, char * szAppend );
 
 	bool		Apply ( CSphString & sWord );
 	char		Flag () const;
-
+	bool		IsCrossProduct () const;
+	bool		IsPrefix () const;
+	
 private:
 	RuleType_e	m_eRule;
 	char		m_cFlag;
+	bool		m_bCrossProduct;
 	CSphString	m_sCondition;
 	CSphString	m_sStrip;
 	CSphString	m_sAppend;
@@ -222,13 +225,14 @@ private:
 };
 
 
-CISpellAffixRule::CISpellAffixRule ( RuleType_e eRule, char cFlag, char * szCondition, char * szStrip, char * szAppend )
-	: m_eRule		( eRule )
-	, m_cFlag		( cFlag )
-	, m_sCondition	( szCondition )
-	, m_sStrip		( szStrip )
-	, m_sAppend		( szAppend )
-	, m_iWordLen	( 0 )
+CISpellAffixRule::CISpellAffixRule ( RuleType_e eRule, char cFlag, bool bCrossProduct, char * szCondition, char * szStrip, char * szAppend )
+	: m_eRule			( eRule )
+	, m_cFlag			( cFlag )
+	, m_bCrossProduct	( bCrossProduct )
+	, m_sCondition		( szCondition )
+	, m_sStrip			( szStrip )
+	, m_sAppend			( szAppend )
+	, m_iWordLen		( 0 )
 {
 	m_iCondLen	= szCondition ? strlen ( szCondition ) : 0;
 	m_iStripLen = szStrip ? strlen ( szStrip ) : 0;
@@ -254,10 +258,7 @@ bool CISpellAffixRule::Apply ( CSphString & sWord )
 			return false;
 
 		if ( ! StripAppendSuffix ( sWord ) )
-		{
-			printf ( "Warning: can't append suffix to '%s'. Wrong flags?\n", sWord.cstr () );
 			return false;
-		}
 	}
 	else
 	{
@@ -265,10 +266,7 @@ bool CISpellAffixRule::Apply ( CSphString & sWord )
 			return false;
 
 		if ( ! StripAppendPrefix ( sWord ) )
-		{
-			printf ( "Warning: can't append prefix to '%s'. Wrong flags?\n", sWord.cstr () );
 			return false;
-		}
 	}
 
 	return true;
@@ -398,6 +396,16 @@ char CISpellAffixRule::Flag () const
 	return m_cFlag;
 }
 
+bool CISpellAffixRule::IsCrossProduct () const
+{
+	return m_bCrossProduct;
+}
+
+bool CISpellAffixRule::IsPrefix () const
+{
+	return m_eRule == RULE_PREFIXES;
+}
+
 //////////////////////////////////////////////////////////////////////////
 
 class CISpellAffix
@@ -452,6 +460,7 @@ bool CISpellAffix::Load (  const char * szFilename )
 	bool bOk = true;
 	RuleType_e eRule = RULE_NONE;
 	char cFlag = '\0';
+	bool bCrossProduct = false;
 
 	// TODO: parse all .aff character replacement commands
 	while ( !feof ( pFile ) && bOk )
@@ -522,13 +531,9 @@ bool CISpellAffix::Load (  const char * szFilename )
 			while ( *szStart && isspace ( (unsigned char) *szStart ) )
 				++szStart;
 
-			if ( *szStart != '*' )
-			{
-				bOk = false;
-				break;
-			}
+			bCrossProduct = *szStart == '*';
 
-			cFlag = *(szStart + 1);
+			cFlag = bCrossProduct ? *(szStart + 1) : *(szStart);
 			continue;
 		}
 
@@ -564,7 +569,7 @@ bool CISpellAffix::Load (  const char * szFilename )
 			continue;
 		}
 
-		CISpellAffixRule Rule ( eRule, cFlag, szCondition, szStrip, szAppend );
+		CISpellAffixRule Rule ( eRule, cFlag, bCrossProduct, szCondition, szStrip, szAppend );
 		m_dRules.Add ( Rule );
 	}
 
@@ -760,21 +765,42 @@ int main ( int argc, char ** argv )
 	{
 		fprintf ( pResultFile, "%s > %s\n", pWord->m_sWord.cstr (), pWord->m_sWord.cstr () );
 
+		CSphString sWord, sWordForCross;
+
 		if ( ! pWord->m_sFlags.IsEmpty () )
 		{
-			for ( unsigned int i = 0; i < strlen ( pWord->m_sFlags.cstr () ); ++i )
-			{
-				for ( int j = 0; j < Affix.GetNumRules (); ++j )
+			int iFlagLen = strlen ( pWord->m_sFlags.cstr () );
+
+			for ( int iFlag1 = 0; iFlag1 < iFlagLen; ++iFlag1 )
+				for ( int iRule1 = 0; iRule1 < Affix.GetNumRules (); ++iRule1 )
 				{
-					CISpellAffixRule * pRule = Affix.GetRule ( j );
-					if ( pRule->Flag () == pWord->m_sFlags.cstr () [i] )
-					{
-						CSphString sWord = pWord->m_sWord;
-						if ( pRule->Apply ( sWord ) )
-							fprintf ( pResultFile, "%s > %s\n", sWord.cstr (), pWord->m_sWord.cstr () );
-					}
+					CISpellAffixRule * pRule1 = Affix.GetRule ( iRule1 );
+					if ( pRule1->Flag () != pWord->m_sFlags.cstr () [iFlag1] )
+						continue;
+
+					sWord = pWord->m_sWord;
+
+					if ( ! pRule1->Apply ( sWord ) )
+						continue;
+
+					fprintf ( pResultFile, "%s > %s\n", sWord.cstr (), pWord->m_sWord.cstr () );
+
+					// apply other rules
+					if ( ! pRule1->IsCrossProduct () )
+						continue;
+
+					for ( int iFlag2 = iFlag1 + 1; iFlag2 < iFlagLen; ++iFlag2 )
+						for ( int iRule2 = 0; iRule2 < Affix.GetNumRules (); ++iRule2 )
+						{
+							CISpellAffixRule * pRule2 = Affix.GetRule ( iRule2 );
+							if ( ! pRule2->IsCrossProduct () || pRule2->Flag () != pWord->m_sFlags.cstr () [iFlag2] || pRule2->IsPrefix () == pRule1->IsPrefix () )
+								continue;
+
+							sWordForCross = sWord;
+							if ( pRule2->Apply ( sWordForCross ) )
+								fprintf ( pResultFile, "%s > %s\n", sWordForCross.cstr (), pWord->m_sWord.cstr () );
+						}
 				}
-			}
 		}
 
 		if ( nDone % 5 == 0 )
