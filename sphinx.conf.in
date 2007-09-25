@@ -364,11 +364,14 @@ index test1
 	#
 	# optional, default is "none"
 	#
+	# several stemmers can be specified (comma-separated)
+	#
 	# morphology		= none
 	# morphology		= stem_en
 	# morphology		= stem_ru
 	# morphology		= stem_enru
 	# morphology		= soundex
+	# morphology 		= stem_en, stem_ru, soundex
 	#
 	# morphology		= libstemmer_german
 	# morphology		= libstemmer_dan
