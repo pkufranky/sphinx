@@ -10960,6 +10960,8 @@ bool CSphDictCRC::ToNormalForm ( BYTE * pWord )
 			return false;
 
 		strcpy ( (char *)pWord, m_dNormalForms [*pIndex].cstr () );
+
+		return true;
 	}
 
 	return false;
