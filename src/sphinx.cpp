@@ -10730,59 +10730,11 @@ enum
 	,SPH_MORPH_STEM_RU_CP1251
 	,SPH_MORPH_STEM_RU_UTF8
 	,SPH_MORPH_SOUNDEX
-	,SPH_MORPH_LIBSTEMMER
 	,SPH_MORPH_STEM_CZ
+	,SPH_MORPH_LIBSTEMMER_FIRST
+	,SPH_MORPH_LIBSTEMMER_LAST = SPH_MORPH_LIBSTEMMER_FIRST + 64
 };
 
-/// common id-based stemmer
-static bool stem_by_id ( BYTE * pWord, int iStemmer )
-{
-	char szBuf [SPH_MAX_WORD_LEN];
-	strcpy ( szBuf, (char *)pWord );
-
-	switch ( iStemmer )
-	{
-	case SPH_MORPH_STEM_EN:
-		stem_en ( pWord );
-		break;
-
-	case SPH_MORPH_STEM_RU_CP1251:
-		stem_ru_cp1251 ( pWord );
-		break;
-
-	case SPH_MORPH_STEM_RU_UTF8:
-		stem_ru_utf8 ( (WORD*)pWord );
-		break;
-
-	case SPH_MORPH_SOUNDEX:
-		stem_soundex ( pWord );
-		break;
-
-	case SPH_MORPH_LIBSTEMMER:
-#if USE_LIBSTEMMER
-		if ( m_iMorph & SPH_MORPH_LIBSTEMMER )
-		{
-			assert ( m_pStemmer );
-
-			const sb_symbol * sStemmed = sb_stemmer_stem ( m_pStemmer, (sb_symbol*)pWord, strlen((const char*)pWord) );
-			int iLen = sb_stemmer_length ( m_pStemmer );
-
-			memcpy ( pWord, sStemmed, iLen );
-			pWord[iLen] = '\0';		
-		}
-#endif
-		break;
-
-	case SPH_MORPH_STEM_CZ:
-		stem_cz ( pWord );
-		break;
-
-	default:
-		return false;
-	}
-
-	return strcmp ( (char *)pWord, szBuf ) != 0;
-}
 
 /////////////////////////////////////////////////////////////////////////////
 // CRC32/64 DICTIONARIES
@@ -10804,7 +10756,7 @@ struct CSphDictCRC : CSphDict
 protected:
 	CSphVector < int >	m_dMorph;
 #if USE_LIBSTEMMER
-	sb_stemmer *		m_pStemmer;
+	CSphVector < sb_stemmer * >	m_dStemmers;
 #endif
 
 	int					m_iStopwords;	///< stopwords count
@@ -10822,6 +10774,7 @@ protected:
 private:
 	bool				InitMorph ( const char * szMorph, int iLength, bool bUseUTF8, CSphString & sError );
 	bool				AddMorph ( int iMorph );
+	bool				StemById ( BYTE * pWord, int iStemmer );
 };
 
 /////////////////////////////////////////////////////////////////////////////
@@ -10949,9 +10902,6 @@ SphOffset_t sphFNV64 ( const BYTE * s, int iLen )
 
 CSphDictCRC::CSphDictCRC ()
 	: m_pWordHash	( NULL )
-#if USE_LIBSTEMMER
-	, m_pStemmer	( NULL )
-#endif
 	, m_iStopwords	( 0 )
 	, m_pStopwords	( NULL )
 {
@@ -10962,7 +10912,8 @@ CSphDictCRC::~CSphDictCRC ()
 {
 	SafeDelete ( m_pWordHash );
 #if USE_LIBSTEMMER
-	sb_stemmer_delete ( m_pStemmer );
+	ARRAY_FOREACH ( i, m_dStemmers )
+		sb_stemmer_delete ( m_dStemmers [i] );
 #endif
 }
 
@@ -11093,35 +11044,43 @@ bool CSphDictCRC::InitMorph ( const char * szMorph, int iLength, bool bUseUTF8, 
 
 #if USE_LIBSTEMMER
 	const int LIBSTEMMER_LEN = 11;
-	if ( iLength > LIBSTEMMER_LEN && !strncmp ( szMorph, "libstemmer_", iLength ) )
+	const int MAX_ALGO_LENGTH = 64;
+	if ( iLength > LIBSTEMMER_LEN && iLength - LIBSTEMMER_LEN < MAX_ALGO_LENGTH && !strncmp ( szMorph, "libstemmer_", LIBSTEMMER_LEN ) )
 	{
-		const int ALGO_LENGTH = 64;
-		char szAlgo [64];
+		char szAlgo [MAX_ALGO_LENGTH];
 
 		strncpy ( szAlgo, szMorph + LIBSTEMMER_LEN, iLength - LIBSTEMMER_LEN );
 		szAlgo [iLength - LIBSTEMMER_LEN] = '\0';
 
+		sb_stemmer * pStemmer = NULL;
+
 		if ( bUseUTF8 )
-			m_pStemmer = sb_stemmer_new ( szAlgo, "UTF_8" );
+			pStemmer = sb_stemmer_new ( szAlgo, "UTF_8" );
 		else
 		{
-			m_pStemmer = sb_stemmer_new ( szAlgo, "ISO_8859_1" );
+			pStemmer = sb_stemmer_new ( szAlgo, "ISO_8859_1" );
 
-			if ( !m_pStemmer )
-				m_pStemmer = sb_stemmer_new ( szAlgo, "ISO_8859_2" );
+			if ( !pStemmer )
+				pStemmer = sb_stemmer_new ( szAlgo, "ISO_8859_2" );
 
-			if ( !m_pStemmer )
-				m_pStemmer = sb_stemmer_new ( szAlgo, "KOI8_R" );
+			if ( !pStemmer )
+				pStemmer = sb_stemmer_new ( szAlgo, "KOI8_R" );
 		}
 
-		if ( !m_pStemmer )
+		if ( !pStemmer )
 		{
 			sError.SetSprintf ( "libstemmer morphology algorithm '%s' not available for %s encoding - IGNORED",
 				szAlgo, bUseUTF8 ? "UTF-8" : "SBCS" );
 			return false;
 		}
 
-		return AddMorph ( SPH_MORPH_LIBSTEMMER );;
+		AddMorph ( SPH_MORPH_LIBSTEMMER_FIRST + m_dStemmers.GetLength () );
+		ARRAY_FOREACH ( i, m_dStemmers )
+			if ( m_dStemmers [i] == pStemmer )
+				return false;
+
+		m_dStemmers.Add ( pStemmer );
+		return true;
 	}
 #endif
 
@@ -11155,7 +11114,7 @@ SphWordID_t CSphDictCRC::GetWordID ( BYTE * pWord )
 	if ( ! ToNormalForm ( pWord ) )
 	{
 		for ( int i = 0; i < m_dMorph.GetLength (); ++i )
-			if ( stem_by_id ( pWord, m_dMorph [i] ) )
+			if ( StemById ( pWord, m_dMorph [i] ) )
 				break;
 	}
 
@@ -11296,8 +11255,10 @@ bool CSphDictCRC::SetMorphology ( const CSphVariant * sMorph, bool bUseUTF8, CSp
 	m_dMorph.Reset ();
 
 #if USE_LIBSTEMMER
-	sb_stemmer_delete ( m_pStemmer );
-	m_pStemmer = NULL;
+	ARRAY_FOREACH ( i, m_dStemmers )
+		sb_stemmer_delete ( m_dStemmers [i] );
+
+	m_dStemmers.Reset ();
 #endif
 
 	if ( !sMorph )
@@ -11318,6 +11279,59 @@ bool CSphDictCRC::SetMorphology ( const CSphVariant * sMorph, bool bUseUTF8, CSp
 	}
 
 	return true;
+}
+
+/// common id-based stemmer
+bool CSphDictCRC::StemById ( BYTE * pWord, int iStemmer )
+{
+	char szBuf [SPH_MAX_WORD_LEN];
+	strcpy ( szBuf, (char *)pWord );
+
+	switch ( iStemmer )
+	{
+	case SPH_MORPH_STEM_EN:
+		stem_en ( pWord );
+		break;
+
+	case SPH_MORPH_STEM_RU_CP1251:
+		stem_ru_cp1251 ( pWord );
+		break;
+
+	case SPH_MORPH_STEM_RU_UTF8:
+		stem_ru_utf8 ( (WORD*)pWord );
+		break;
+
+	case SPH_MORPH_SOUNDEX:
+		stem_soundex ( pWord );
+		break;
+
+	case SPH_MORPH_STEM_CZ:
+		stem_cz ( pWord );
+		break;
+
+	default:
+#if USE_LIBSTEMMER
+		if ( iStemmer >= SPH_MORPH_LIBSTEMMER_FIRST && iStemmer < SPH_MORPH_LIBSTEMMER_LAST )
+		{
+			sb_stemmer * pStemmer = m_dStemmers [iStemmer - SPH_MORPH_LIBSTEMMER_FIRST];
+			assert ( pStemmer );
+			
+			const sb_symbol * sStemmed = sb_stemmer_stem ( pStemmer, (sb_symbol*)pWord, strlen((const char*)pWord) );
+			int iLen = sb_stemmer_length ( pStemmer );
+
+			memcpy ( pWord, sStemmed, iLen );
+			pWord[iLen] = '\0';
+		}
+		else
+			return false;
+
+	break;
+#else
+		return false;
+#endif
+	}
+
+	return strcmp ( (char *)pWord, szBuf ) != 0;
 }
 
 
