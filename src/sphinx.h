@@ -307,10 +307,6 @@ ISphTokenizer *			sphCreateUTF8NgramTokenizer ();
 // DICTIONARIES
 /////////////////////////////////////////////////////////////////////////////
 
-#if USE_WINDOWS
-#pragma warning(disable:4100)
-#endif
-
 /// abstract word dictionary interface
 struct CSphDict
 {
@@ -332,7 +328,7 @@ struct CSphDict
 	virtual void		LoadStopwords ( const char * sFiles, ISphTokenizer * pTokenizer ) = 0;
 
 	/// load wordforms from a given file 
-	virtual bool		LoadWordforms ( const char * szFile ) { return false; }
+	virtual bool		LoadWordforms ( const char * ) { return false; }
 
 	/// set morphology
 	virtual bool		SetMorphology ( const CSphVariant * sMorph, bool bUseUTF8, CSphString & sError ) = 0;

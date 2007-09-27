@@ -11085,6 +11085,8 @@ bool CSphDictCRC::InitMorph ( const char * szMorph, int iLength, bool bUseUTF8, 
 	if ( iLength == 7 && !strncmp ( szMorph, "soundex", iLength ) )
 		return AddMorph ( SPH_MORPH_SOUNDEX );
 
+	sError = "";
+
 #if USE_LIBSTEMMER
 	const int LIBSTEMMER_LEN = 11;
 	const int MAX_ALGO_LENGTH = 64;
