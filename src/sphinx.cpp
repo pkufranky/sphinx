@@ -41,7 +41,7 @@
 	#define snprintf	_snprintf
 	#define sphSeek		_lseeki64
 	#define strtoull	_strtoui64
-
+	#define stat		_stat
 #else
 	#include <unistd.h>
 	#include <sys/time.h>
@@ -10774,7 +10774,7 @@ private:
 	{
 		int							m_iRefCount;
 		CSphString					m_sFilename;
-		struct _stat				m_Stat;
+		struct stat				m_Stat;
 		CSphVector <CSphString>		m_dNormalForms;
 		CWordHash					m_dHash;
 
@@ -10931,8 +10931,8 @@ bool CSphDictCRC::WordformContainer::IsEqual ( const char * szFile )
 	if ( ! szFile )
 		return false;
 
-	struct _stat FileStat;
-	if ( _stat ( szFile, &FileStat ) == -1 )
+	struct stat FileStat;
+	if ( stat ( szFile, &FileStat ) == -1 )
 		return false;
 
 	return m_sFilename == szFile && m_Stat.st_ctime == FileStat.st_ctime
@@ -10942,9 +10942,9 @@ bool CSphDictCRC::WordformContainer::IsEqual ( const char * szFile )
 /////////////////////////////////////////////////////////////////////////////
 
 CSphDictCRC::CSphDictCRC ()
-	: m_pWordforms	( NULL )
-	, m_iStopwords	( 0 )
+	: m_iStopwords	( 0 )
 	, m_pStopwords	( NULL )
+	, m_pWordforms	( NULL )
 {
 }
 
@@ -11285,8 +11285,8 @@ CSphDictCRC::WordformContainer * CSphDictCRC::LoadWordformContainer ( const char
 	if ( !szFile )
 		return NULL;
 
-	struct _stat FileStat;
-	if ( _stat ( szFile, &FileStat ) == -1 )
+	struct stat FileStat;
+	if ( stat ( szFile, &FileStat ) == -1 )
 		return NULL;
 
 	FILE * pFile = fopen ( szFile, "rt" );
