@@ -623,6 +623,8 @@ void Shutdown ()
 			g_hIndexes.IterateGet().m_pIndex->Unlock();
 		g_hIndexes.Reset();
 
+		sphShutdownWordforms ();
+
 		// remove pid
 		if ( g_sPidFile )
 			::unlink ( g_sPidFile );

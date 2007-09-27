@@ -307,6 +307,10 @@ ISphTokenizer *			sphCreateUTF8NgramTokenizer ();
 // DICTIONARIES
 /////////////////////////////////////////////////////////////////////////////
 
+#if USE_WINDOWS
+#pragma warning(disable:4100)
+#endif
+
 /// abstract word dictionary interface
 struct CSphDict
 {
@@ -337,6 +341,9 @@ struct CSphDict
 
 /// dictionary factory
 CSphDict * sphCreateDictionaryCRC ( const CSphVariant * pMorph, const char * szStopwords, const char * szWordforms, ISphTokenizer * pTokenizer, CSphString & sError );
+
+/// clear wordform cache
+void sphShutdownWordforms ();
 
 /////////////////////////////////////////////////////////////////////////////
 // DATASOURCES

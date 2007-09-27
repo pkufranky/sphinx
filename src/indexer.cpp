@@ -1147,6 +1147,8 @@ int main ( int argc, char ** argv )
 		}
 	}
 
+	sphShutdownWordforms ();
+
 	////////////////////////////
 	// rotating searchd indices
 	////////////////////////////
