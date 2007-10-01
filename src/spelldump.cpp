@@ -490,7 +490,7 @@ bool CISpellAffix::Load (  const char * szFilename )
 
 			if ( !*szStart )
 			{
-				printf ( "Warning: invalid 'wordchars' statement\n" );
+				printf ( "WARNING: invalid 'wordchars' statement\n" );
 				continue;
 			}
 
@@ -508,7 +508,7 @@ bool CISpellAffix::Load (  const char * szFilename )
 			*szStart = '\0';
 
 			if ( !AddToCharset ( szRangeL, szRangeU ) )
-				printf ( "Warning: cannot add to charset: '%s' '%s'\n", szRangeL, szRangeU );
+				printf ( "WARNING: cannot add to charset: '%s' '%s'\n", szRangeL, szRangeU );
 
 			continue;
 		}
@@ -517,7 +517,7 @@ bool CISpellAffix::Load (  const char * szFilename )
 		{
 			if ( eRule == RULE_NONE )
 			{
-				printf ( "Warning: 'flag' appears before preffixes or suffixes\n" );
+				printf ( "WARNING: 'flag' appears before preffixes or suffixes\n" );
 				continue;
 			}
 			
@@ -716,16 +716,14 @@ void CISpellAffix::LoadLocale ()
 	else
 		if ( ! m_sLocale.IsEmpty () )
 		{
-			char szLocaleBuffer [MAX_STR_LENGTH];
-			sprintf ( szLocaleBuffer, ".%s", m_sLocale.cstr () );
-			char * szLocale = setlocale( LC_ALL, szLocaleBuffer );
+			char * szLocale = setlocale ( LC_CTYPE, m_sLocale.cstr() );
 			if ( szLocale )
-				printf ( "Using user-defined character set: '%s'\n", szLocale );
+				printf ( "Using user-defined locale (locale=%s)\n", m_sLocale.cstr() );
 			else
-				printf ( "Warning: could not load specified code page\n" );
+				printf ( "WARNING: could not set user-defined locale for case conversions (locale=%s)\n", m_sLocale.cstr() );
 		}
 		else
-			printf ( "Warning: no character set specified\n" );
+			printf ( "WARNING: no character set specified\n" );
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -747,9 +745,16 @@ int main ( int argc, char ** argv )
 			sAffix = argv [2];
 			break;
 		default:
-			printf ( "Usage: spelldump <dictionary> <affix> [result] [codepage_number]\n" );
+			printf ( "Usage: spelldump <dictionary> <affix> [result] [locale-name]\n" );
 			if ( argc==1 )
+			{
+				printf ( "\n"
+					"Examples:\n"
+					"spelldump en.dict en.aff\n"
+					"spelldump ru.dict ru.aff ru.txt ru_RU.CP1251\n"
+					"spelldump ru.dict ru.aff ru.txt .1251\n" );
 				exit ( 0 );
+			}
 			break;
 	}
 
