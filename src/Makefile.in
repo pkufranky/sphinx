@@ -81,7 +81,8 @@ searchd_DEPENDENCIES = libsphinx.a $(am__DEPENDENCIES_1) \
 	$(am__DEPENDENCIES_2) $(am__DEPENDENCIES_2)
 am_spelldump_OBJECTS = spelldump.$(OBJEXT)
 spelldump_OBJECTS = $(am_spelldump_OBJECTS)
-spelldump_DEPENDENCIES = sphinxstd.o
+spelldump_DEPENDENCIES = libsphinx.a $(am__DEPENDENCIES_1) \
+	$(am__DEPENDENCIES_2) $(am__DEPENDENCIES_2)
 DEFAULT_INCLUDES = -I. -I$(srcdir) -I$(top_builddir)/config
 depcomp = $(SHELL) $(top_srcdir)/config/depcomp
 am__depfiles_maybe = depfiles
@@ -206,7 +207,7 @@ spelldump_SOURCES = spelldump.cpp
 indexer_LDADD = libsphinx.a $(LIBSTEMMER_LIBS) $(MYSQL_LIBS) $(PGSQL_LIBS)
 searchd_LDADD = libsphinx.a $(LIBSTEMMER_LIBS) $(MYSQL_LIBS) $(PGSQL_LIBS) -lz
 search_LDADD = libsphinx.a $(LIBSTEMMER_LIBS) $(MYSQL_LIBS) $(PGSQL_LIBS)
-spelldump_LDADD = sphinxstd.o
+spelldump_LDADD = libsphinx.a $(LIBSTEMMER_LIBS) $(MYSQL_LIBS) $(PGSQL_LIBS)
 EXTRA_DIST = indexer.vcproj libsphinx.vcproj searchd.vcproj search.vcproj
 all: all-am
 
