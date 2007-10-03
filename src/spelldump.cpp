@@ -2,7 +2,6 @@
 // $Id$
 //
 
-#include "sphinxstd.h"
 #include "sphinx.h"
 
 #include <locale.h>
@@ -919,6 +918,8 @@ int main ( int argc, char ** argv )
 
 		++nDone;
 	}
+
+	printf ( "\n" );
 
 	fclose ( pResultFile );
 
