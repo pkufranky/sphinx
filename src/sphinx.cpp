@@ -2525,27 +2525,6 @@ void sphSetInternalErrorCallback ( void (*fnCallback) ( const char * ) )
 // TOKENIZERS
 /////////////////////////////////////////////////////////////////////////////
 
-/// parser to build lowercaser from textual config
-class CSphCharsetDefinitionParser
-{
-public:
-						CSphCharsetDefinitionParser ();
-	bool				Parse ( const char * sConfig, CSphVector<CSphRemapRange> & dRanges );
-	const char *		GetLastError ();
-
-protected:
-	bool				m_bError;
-	char				m_sError [ 1024 ];
-	const char *		m_pCurrent;
-
-	bool				Error ( const char * sMessage );
-	void				SkipSpaces ();
-	bool				IsEof ();
-	bool				CheckEof ();
-	int					HexDigit ( int c );
-	int					ParseCharsetCode ();
-};
-
 
 /// single-byte charset tokenizer
 class CSphTokenizer_SBCS : public ISphTokenizer

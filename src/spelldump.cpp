@@ -3,6 +3,7 @@
 //
 
 #include "sphinxstd.h"
+#include "sphinx.h"
 
 #include <locale.h>
 
@@ -406,7 +407,7 @@ bool CISpellAffixRule::IsPrefix () const
 class CISpellAffix
 {
 public:
-				CISpellAffix ( const char * szLocale );
+				CISpellAffix ( const char * szLocale, const char * szCharsetFile  );
 
 	bool		Load ( const char * szFilename );
 	CISpellAffixRule * GetRule ( int iRule );
@@ -420,7 +421,11 @@ private:
 	char		m_dCharset [256];
 	bool		m_bFirstCaseConv;
 	CSphString	m_sLocale;
+	CSphString	m_sCharsetFile;
 	bool		m_bCheckCrosses;
+	CSphLowercaser m_LowerCaser;
+	bool		m_bUseLowerCaser;
+	bool		m_bUseDictConversion;
 
 	bool		AddToCharset ( char * szRangeL, char * szRangeU );
 	void		AddCharPair ( char cCharL, char cCharU );
@@ -430,9 +435,13 @@ private:
 };
 
 
-CISpellAffix::CISpellAffix ( const char * szLocale )
-	: m_sLocale			( szLocale )
+CISpellAffix::CISpellAffix ( const char * szLocale, const char * szCharsetFile )
+	: m_bFirstCaseConv	( true )
+	, m_sLocale			( szLocale )
+	, m_sCharsetFile	( szCharsetFile )
 	, m_bCheckCrosses	( false )
+	, m_bUseLowerCaser	( false )
+	, m_bUseDictConversion	( false )
 {
 }
 
@@ -445,6 +454,9 @@ bool CISpellAffix::Load (  const char * szFilename )
 	m_dRules.Reset ();
 	memset ( m_dCharset, 0, sizeof ( m_dCharset ) );
 	m_bFirstCaseConv = true;
+	m_bUseLowerCaser = false;
+	m_bUseDictConversion = false;
+	m_LowerCaser.Reset ();
 
 	FILE * pFile = fopen ( szFilename, "rt" );
 	if ( !pFile )
@@ -701,10 +713,17 @@ char CISpellAffix::ToLowerCase ( char cChar )
 	}
 
 	// dictionary conversion
-	if ( m_dCharset [(BYTE) cChar] )
-		return m_dCharset [(BYTE) cChar];
+	if ( m_bUseDictConversion )
+		return m_dCharset [(BYTE) cChar] ? m_dCharset [(BYTE) cChar] : cChar;
 
-	// user-defined code page conversion
+	// user-defined character mapping
+	if ( m_bUseLowerCaser )
+	{
+		char cResult = (char)m_LowerCaser.ToLower( (BYTE) cChar );
+		return cResult ? cResult : cChar;
+	}
+
+	// user-specified code page conversion
 	return (char)tolower ( cChar );
 }
 
@@ -712,61 +731,112 @@ char CISpellAffix::ToLowerCase ( char cChar )
 void CISpellAffix::LoadLocale ()
 {
 	if ( HaveCharset () )
+	{
+		m_bUseDictConversion = true;
 		printf ( "Using dictionary-defined character set\n" );
+	}
 	else
-		if ( ! m_sLocale.IsEmpty () )
+		if ( !m_sCharsetFile.IsEmpty () )
 		{
-			char dLocaleC [256];
-			char dLocaleUser [256];
-			for ( int i = 0; i < 256; ++i )
+			FILE * pFile = fopen ( m_sCharsetFile.cstr (), "rt" );
+			bool bError = pFile == NULL;
+			if ( pFile )
 			{
-				dLocaleC [i] = (char) i;
-				dLocaleUser [i] = (char) i;
+				printf ( "Using charater set from '%s'\n", m_sCharsetFile.cstr () );
+				
+				const int MAX_CHARSET_LENGTH = 4096;
+				char szBuffer [MAX_CHARSET_LENGTH];
+
+				char * szResult = fgets ( szBuffer, MAX_CHARSET_LENGTH, pFile );
+				if ( szResult )
+				{
+					CSphCharsetDefinitionParser tParser;
+					CSphVector<CSphRemapRange> dRemaps;
+					if ( tParser.Parse ( szBuffer, dRemaps ) )
+					{
+						m_bUseLowerCaser = true;
+						m_LowerCaser.AddRemaps ( &dRemaps[0], dRemaps.GetLength(), 0, 0 );
+					}
+					else
+						bError = true;
+				}
+				else
+					bError = true;
 			}
 
-			setlocale( LC_ALL, "C" );
-			for ( int i = 0; i < 256; ++i )
-				dLocaleC [i] = (char)tolower ( dLocaleC [i] );
-
-			char * szLocale = setlocale ( LC_CTYPE, m_sLocale.cstr() );
-			
-			if ( szLocale )
-			{
-				printf ( "Using user-defined locale (locale=%s)\n", m_sLocale.cstr() );
-
-				for ( int i = 0; i < 256; ++i )
-					dLocaleUser [i] = (char)tolower ( dLocaleUser [i] );
-
-				if ( !memcmp ( dLocaleC, dLocaleUser, 256 ) )
-					printf ( "WARNING: user-defined locale provides the same case conversion as the default \"C\" locale\n" );
-			}
-			else
-				printf ( "WARNING: could not set user-defined locale for case conversions (locale=%s)\n", m_sLocale.cstr() );
+			if ( bError )
+				printf ( "Error loading character set\n" );
 		}
 		else
-			printf ( "WARNING: no character set specified\n" );
+			if ( !m_sLocale.IsEmpty () )
+			{
+				char dLocaleC [256];
+				char dLocaleUser [256];
+				for ( int i = 0; i < 256; ++i )
+				{
+					dLocaleC [i] = (char) i;
+					dLocaleUser [i] = (char) i;
+				}
+
+				setlocale( LC_ALL, "C" );
+				for ( int i = 0; i < 256; ++i )
+					dLocaleC [i] = (char)tolower ( dLocaleC [i] );
+
+				char * szLocale = setlocale ( LC_CTYPE, m_sLocale.cstr() );
+				
+				if ( szLocale )
+				{
+					printf ( "Using user-defined locale (locale=%s)\n", m_sLocale.cstr() );
+
+					for ( int i = 0; i < 256; ++i )
+						dLocaleUser [i] = (char)tolower ( dLocaleUser [i] );
+
+					if ( !memcmp ( dLocaleC, dLocaleUser, 256 ) )
+						printf ( "WARNING: user-defined locale provides the same case conversion as the default \"C\" locale\n" );
+				}
+				else
+					printf ( "WARNING: could not set user-defined locale for case conversions (locale=%s)\n", m_sLocale.cstr() );
+			}
+			else
+				printf ( "WARNING: no character set specified\n" );
 }
 
 //////////////////////////////////////////////////////////////////////////
 
 int main ( int argc, char ** argv )
 {
-	CSphString sDict, sAffix, sLocale, sResult = "result.txt";
+	bool bUseCustomCharset = false;
+	CSphString sDict, sAffix, sLocale, sCharsetFile, sResult = "result.txt";
 
 	printf ( "spelldump, an ispell dictionary dumper\n\n" );
 
-	switch ( argc )
+	int nArgsStart = 1;
+
+	if ( argc >= 3 )
 	{
-		case 5:
-			sLocale = argv [4];
+		if ( ! strcmp ( argv [1], "-c" ) )
+		{
+			bUseCustomCharset = true;
+			sCharsetFile = argv [2];
+			nArgsStart += 2;
+		}
+	}
+
+	switch ( argc - nArgsStart )
+	{
 		case 4:
-			sResult = argv [3];
+			sLocale = argv [nArgsStart + 3];
 		case 3:
-			sDict = argv [1];
-			sAffix = argv [2];
+			sResult = argv [nArgsStart + 2];
+		case 2:
+			sAffix = argv [nArgsStart + 1];
+			sDict = argv [nArgsStart];
 			break;
 		default:
-			printf ( "Usage: spelldump <dictionary> <affix> [result] [locale-name]\n" );
+			printf ( "Usage: spelldump [options] <dictionary> <affix> [result] [locale-name]\n\n"
+					 "options:\n"
+					 "-c <file> : use case convertion defined in <file>\n" );
+
 			if ( argc==1 )
 			{
 				printf ( "\n"
@@ -785,7 +855,7 @@ int main ( int argc, char ** argv )
 		sphDie ( "Error loading dictionary file '%s'\n", sDict.IsEmpty () ? "" : sDict.cstr () );
 
 	printf ( "Loading affix file...\n" );
-	CISpellAffix Affix ( sLocale.cstr () );
+	CISpellAffix Affix ( sLocale.cstr (), bUseCustomCharset ? sCharsetFile.cstr () : NULL );
 	if ( !Affix.Load ( sAffix.cstr () ) )
 		sphDie ( "Error loading affix file '%s'\n", sAffix.IsEmpty () ? "" : sAffix.cstr () );
 
