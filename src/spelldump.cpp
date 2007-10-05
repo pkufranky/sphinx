@@ -723,7 +723,7 @@ char CISpellAffix::ToLowerCase ( char cChar )
 	}
 
 	// user-specified code page conversion
-	return (char)tolower ( cChar );
+	return (char)tolower ( (BYTE)cChar ); // workaround for systems (eg. FreeBSD) which default to signed char. marvelous!
 }
 
 
@@ -769,26 +769,19 @@ void CISpellAffix::LoadLocale ()
 		else
 			if ( !m_sLocale.IsEmpty () )
 			{
-				char dLocaleC [256];
-				char dLocaleUser [256];
-				for ( int i = 0; i < 256; ++i )
-				{
-					dLocaleC [i] = (char) i;
-					dLocaleUser [i] = (char) i;
-				}
+				char dLocaleC[256], dLocaleUser[256];
 
-				setlocale( LC_ALL, "C" );
-				for ( int i = 0; i < 256; ++i )
-					dLocaleC [i] = (char)tolower ( dLocaleC [i] );
+				setlocale ( LC_ALL, "C" );
+				for ( int i=0; i<256; i++ )
+					dLocaleC [i] = (char) tolower(i);
 
 				char * szLocale = setlocale ( LC_CTYPE, m_sLocale.cstr() );
-				
 				if ( szLocale )
 				{
 					printf ( "Using user-defined locale (locale=%s)\n", m_sLocale.cstr() );
 
-					for ( int i = 0; i < 256; ++i )
-						dLocaleUser [i] = (char)tolower ( dLocaleUser [i] );
+					for ( int i=0; i<256; i++ )
+						dLocaleUser [i] = (char) tolower(i);
 
 					if ( !memcmp ( dLocaleC, dLocaleUser, 256 ) )
 						printf ( "WARNING: user-defined locale provides the same case conversion as the default \"C\" locale\n" );
