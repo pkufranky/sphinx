@@ -592,7 +592,7 @@ class SphinxClient:
 			while count>0 and p<max_:
 				count -= 1
 				if id64:
-					doc, dochi, weight = unpack('>3L', response[p:p+12])
+					dochi, doc, weight = unpack('>3L', response[p:p+12])
 					doc += (dochi<<32)
 					p += 12
 				else:
