@@ -34,6 +34,7 @@ index test
 <query mode="extended2">"phrase query"</query>
 <query mode="extended2">"phrase (query)/3 ~on steroids"</query>
 <query mode="extended2">@title sample @body world</query>
+<query mode="extended2">-query</query>
 </queries>
 
 <db_create>

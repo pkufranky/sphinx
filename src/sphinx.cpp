@@ -11911,7 +11911,7 @@ ExtRanker_c::ExtRanker_c ( const CSphExtendedQueryNode * pAccept, const CSphExte
 	assert ( pAccept );
 	m_pRoot = ExtNode_i::Create ( pAccept, tSetup, 1, pWarning );
 
-	if ( pReject )
+	if ( m_pRoot && pReject )
 	{
 		ExtNode_i * pRej = ExtNode_i::Create ( pReject, tSetup, 1, pWarning );
 		if ( pRej )
