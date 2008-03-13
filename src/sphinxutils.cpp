@@ -716,10 +716,14 @@ ISphTokenizer * sphConfTokenizer ( const CSphConfigSection & hIndex, CSphString 
 		pTokenizer->SetNgramLen ( iNgramLen );
 
 	// synonyms
-	if ( hIndex("synonyms") )
-		if ( !pTokenizer->LoadSynonyms ( hIndex["synonyms"].cstr(), sError ) )
+	CSphVariant * pExceptions = hIndex("exceptions"); // new option name
+	if ( !pExceptions )
+		pExceptions = hIndex("synonyms"); // deprecated option name
+
+	if ( pExceptions )
+		if ( !pTokenizer->LoadSynonyms ( pExceptions->cstr(), sError ) )
 	{
-		sError.SetSprintf ( "'synonyms': %s", sError.cstr() );
+		sError.SetSprintf ( "'exceptions': %s", sError.cstr() );
 		return NULL;
 	}
 
