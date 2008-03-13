@@ -1285,8 +1285,8 @@ bool CSphExtendedQueryParser::Parse ( CSphExtendedQuery & tParsed, const char * 
 			continue;
 		}
 
-		// proximity operator out of its state. just ignore
-		if ( iSpecial=='~' )
+		// proximity or quorum operator out of its state. just ignore
+		if ( iSpecial=='~' || iSpecial=='/' )
 			continue;
 
 		assert ( 0 && "INTERNAL ERROR: unhandled special token" );
