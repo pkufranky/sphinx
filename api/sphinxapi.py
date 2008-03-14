@@ -411,7 +411,7 @@ class SphinxClient:
 		self.AddQuery(query,index,comment)
 		results = self.RunQueries()
 
-		if len(results)==0:
+		if not results or len(results)==0:
 			return None
 		self._error = results[0]['error']
 		self._warning = results[0]['warning']
