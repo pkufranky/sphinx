@@ -11725,6 +11725,10 @@ const ExtDoc_t * ExtProximity_c::GetDocsChunk ( SphDocID_t * pMaxID )
 		pHit++;
 	}
 
+	// reset current positions for hits chunk getter
+	m_pMyDoc = m_dDocs;
+	m_pMyHit = m_dMyHits;
+
 	assert ( iHit>=0 && iHit<MAX_HITS );
 	m_dMyHits[iHit].m_uDocid = DOCID_MAX; // end marker
 
