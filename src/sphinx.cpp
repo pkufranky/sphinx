@@ -11595,14 +11595,15 @@ const ExtDoc_t * ExtProximity_c::GetDocsChunk ( SphDocID_t * pMaxID )
 		// update hitlist
 		if ( pHit->m_uDocid==DOCID_MAX )
 		{
-			m_uExpID = m_uExpPos = m_uExpQpos = 0;
-
 			pHits = m_pNode->GetHitsChunk ( pDocs, uMaxID );
 			if ( pHits )
 			{
 				pHit = pHits;
 				continue;
 			}
+
+			// no more hits for current document? *now* we can reset
+			m_uExpID = m_uExpPos = m_uExpQpos = 0;
 
 			pDoc = pDocs = m_pNode->GetDocsChunk ( &uMaxID );
 			if ( !pDocs )
