@@ -10489,9 +10489,31 @@ ExtNode_i * ExtNode_i::Create ( const CSphExtendedQueryNode * pNode, const CSphT
 		assert ( tAtom.m_iMaxDistance>=0 );
 		if ( tAtom.m_iMaxDistance==0 )
 			return new ExtPhrase_c ( pNode, uFields, tSetup, uQuerypos, pWarning );
+
 		else if ( tAtom.m_bQuorum )
-			return new ExtQuorum_c ( pNode, uFields, tSetup, uQuerypos, pWarning );
-		else
+		{
+			if ( tAtom.m_iMaxDistance>=tAtom.m_dWords.GetLength() )
+			{
+				// threshold is too high
+				// report a warning, and fallback to "and"
+				if ( pWarning && tAtom.m_iMaxDistance>tAtom.m_dWords.GetLength() )
+					pWarning->SetSprintf ( "quorum threshold too high (words=%d, thresh=%d); replacing quorum operator with AND operator",
+						tAtom.m_dWords.GetLength(), tAtom.m_iMaxDistance );
+
+				// create AND node
+				const CSphVector<CSphExtendedQueryAtomWord> & dWords = pNode->m_tAtom.m_dWords;
+				ExtNode_i * pCur = new ExtTerm_c ( dWords[0].m_sWord, uFields, tSetup, uQuerypos+dWords[0].m_iAtomPos, pWarning );
+				for ( int i=1; i<dWords.GetLength(); i++ )
+					pCur = new ExtAnd_c ( pCur, new ExtTerm_c ( dWords[i].m_sWord, uFields, tSetup, uQuerypos+dWords[i].m_iAtomPos, pWarning ) );
+				return pCur;
+
+			} else
+			{
+				// threshold is ok; create quorum node
+				return new ExtQuorum_c ( pNode, uFields, tSetup, uQuerypos, pWarning );
+			}
+
+		} else
 			return new ExtProximity_c ( pNode, uFields, tSetup, uQuerypos, pWarning );
 
 	} else
