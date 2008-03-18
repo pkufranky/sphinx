@@ -6202,7 +6202,7 @@ bool CSphIndex_VLN::SortOrdinals ( const char * szToFile, int iFromFD, int iAren
 		SphDocID_t uCurID = 0;
 
 		CSphString sLastOrdValue;
-		int iBlock = 0;
+		int iMyBlock = 0;
 
 		for ( ;; )
 		{
@@ -6247,11 +6247,11 @@ bool CSphIndex_VLN::SortOrdinals ( const char * szToFile, int iFromFD, int iAren
 			}
 
 			// get next entry
-			iBlock = qOrdinals.Root().m_iTag;
+			iMyBlock = qOrdinals.Root().m_iTag;
 			qOrdinals.Pop ();
 
-			ESphBinRead eRes = ReadOrdinal ( dBins [iBlock], tOrdinalEntry );
-			tOrdinalEntry.m_iTag = iBlock;
+			ESphBinRead eRes = ReadOrdinal ( dBins [iMyBlock], tOrdinalEntry );
+			tOrdinalEntry.m_iTag = iMyBlock;
 			if ( eRes == BIN_READ_OK )
 				qOrdinals.Push ( tOrdinalEntry );
 
