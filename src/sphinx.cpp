@@ -76,6 +76,11 @@
 	#pragma message("Automatically linking with libmysql.lib")
 #endif
 
+#if ( USE_WINDOWS && USE_PGSQL )
+	#pragma comment(linker, "/defaultlib:libpq.lib")
+	#pragma message("Automatically linking with libpq.lib")
+#endif
+
 #if ( USE_WINDOWS && USE_LIBSTEMMER )
 	#pragma comment(linker, "/defaultlib:libstemmer_c.lib")
 	#pragma message("Automatically linking with libstemmer_c.lib")
