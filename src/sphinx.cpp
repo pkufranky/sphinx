@@ -1077,6 +1077,7 @@ struct CSphTermSetup : ISphNoncopyable
 	const CSphAutofile &	m_tDoclist;
 	const CSphAutofile &	m_tHitlist;
 	DWORD					m_uMaxStamp;
+	const CSphQuery *		m_pQuery;		///< for extended2 filtering only
 
 	CSphTermSetup ( const CSphAutofile & tDoclist, const CSphAutofile & tHitlist )
 		: m_pTokenizer ( NULL )
@@ -1087,6 +1088,7 @@ struct CSphTermSetup : ISphNoncopyable
 		, m_tDoclist ( tDoclist )
 		, m_tHitlist ( tHitlist )
 		, m_uMaxStamp ( 0 )
+		, m_pQuery ( NULL )
 	{}
 };
 
@@ -1569,6 +1571,8 @@ struct CSphIndex_VLN : CSphIndex
 	virtual int					UpdateAttributes ( const CSphAttrUpdate_t & tUpd );
 	virtual bool				SaveAttributes ();
 
+	bool						EarlyReject ( CSphMatch & tMatch, const CSphQuery * pQuery ) const;
+
 private:
 	static const int			WORDLIST_CHECKPOINT		= 1024;		///< wordlist checkpoints frequency
 	static const int			WRITE_BUFFER_SIZE		= 262144;	///< my write buffer size
@@ -1673,7 +1677,6 @@ private:
 	void						CopyDocinfo ( CSphMatch & tMatch, const DWORD * pFound ) const;
 	void						EarlyCalc ( CSphMatch & tMatch ) const;
 	void						LateCalc ( CSphMatch & tMatch ) const;
-	bool						EarlyReject ( CSphMatch & tMatch, const CSphQuery * pQuery ) const;
 
 	bool						BuildMVA ( const CSphVector<CSphSource*> & dSources, CSphAutoArray<CSphWordHit> & dHits, int iArenaSize, int iFieldFD, int nFieldMVAs, int iFieldMVAInPool );
 
@@ -10431,6 +10434,7 @@ public:
 								ExtRanker_c ( const CSphExtendedQueryNode * pAccept, const CSphExtendedQueryNode * pReject, const CSphTermSetup & tSetup, CSphString * pWarning );
 	virtual						~ExtRanker_c () { SafeDelete ( m_pRoot ); }
 
+	virtual const ExtDoc_t *	GetFilteredDocs ();
 	virtual int					GetMatches ( int iFields, const int * pWeights ) = 0;
 
 	void						GetQwords ( ExtQwordsHash_t & hQwords )				{ if ( m_pRoot ) m_pRoot->GetQwords ( hQwords ); }
@@ -10444,6 +10448,12 @@ protected:
 	ExtNode_i *					m_pRoot;
 	const ExtDoc_t *			m_pDoclist;
 	const ExtHit_t *			m_pHitlist;
+	SphDocID_t					m_uMaxID;
+	ExtDoc_t					m_dMyDocs[ExtNode_i::MAX_DOCS];		///< my local documents pool; for filtering
+	CSphMatch					m_dMyMatches[ExtNode_i::MAX_DOCS];	///< my local matches pool; for filtering
+	CSphMatch					m_tTestMatch;
+	const CSphIndex_VLN *		m_pIndex;							///< this is he who'll do my filtering!
+	const CSphQuery *			m_pQuery;							///< this is it that'll carry my filters!
 };
 
 
@@ -10829,6 +10839,9 @@ const ExtHit_t * ExtAnd_c::GetHitsChunk ( const ExtDoc_t * pDocs, SphDocID_t uMa
 {
 	const ExtHit_t * pCur0 = m_pCurHit[0];
 	const ExtHit_t * pCur1 = m_pCurHit[1];
+
+	if ( m_uMatchedDocid < pDocs->m_uDocid )
+		m_uMatchedDocid = 0;
 
 	int iHit = 0;
 	while ( iHit<MAX_HITS-1 )
@@ -11933,7 +11946,11 @@ ExtRanker_c::ExtRanker_c ( const CSphExtendedQueryNode * pAccept, const CSphExte
 {
 	m_iInlineRowitems = ( tSetup.m_eDocinfo==SPH_DOCINFO_INLINE ) ? tSetup.m_tMin.m_iRowitems : 0;
 	for ( int i=0; i<ExtNode_i::MAX_DOCS; i++ )
+	{
 		m_dMatches[i].Reset ( tSetup.m_tMin.m_iRowitems + tSetup.m_iToCalc );
+		m_dMyMatches[i].Reset ( tSetup.m_tMin.m_iRowitems + tSetup.m_iToCalc );
+	}
+	m_tTestMatch.Reset ( tSetup.m_tMin.m_iRowitems + tSetup.m_iToCalc );
 
 	assert ( pAccept );
 	m_pRoot = ExtNode_i::Create ( pAccept, tSetup, 1, pWarning );
@@ -11947,6 +11964,49 @@ ExtRanker_c::ExtRanker_c ( const CSphExtendedQueryNode * pAccept, const CSphExte
 
 	m_pDoclist = NULL;
 	m_pHitlist = NULL;
+	m_uMaxID = 0;
+	m_pIndex = tSetup.m_pIndex;
+	m_pQuery = tSetup.m_pQuery;
+}
+
+
+const ExtDoc_t * ExtRanker_c::GetFilteredDocs ()
+{
+	for ( ;; )
+	{
+		// get another chunk
+		m_uMaxID = 0;
+		const ExtDoc_t * pCand = m_pRoot->GetDocsChunk ( &m_uMaxID );
+		if ( !pCand )
+			return NULL;
+
+		// create matches, and filter them
+		int iDocs = 0;
+		while ( pCand->m_uDocid!=DOCID_MAX )
+		{
+			m_tTestMatch.m_iDocID = pCand->m_uDocid;
+			if ( pCand->m_pDocinfo )
+				memcpy ( m_tTestMatch.m_pRowitems, pCand->m_pDocinfo, m_iInlineRowitems*sizeof(CSphRowitem) );
+
+			if ( m_pIndex->EarlyReject ( m_tTestMatch, m_pQuery ) )
+			{
+				pCand++;
+				continue;
+			}
+
+			m_dMyDocs[iDocs] = *pCand;
+			m_tTestMatch.m_iWeight = int( (pCand->m_fTFIDF+0.5f)*SPH_BM25_SCALE ); // FIXME! bench bNeedBM25
+			Swap ( m_tTestMatch, m_dMyMatches[iDocs] );
+			iDocs++;
+			pCand++;
+		}
+
+		if ( iDocs )
+		{
+			m_dMyDocs[iDocs].m_uDocid = DOCID_MAX;
+			return m_dMyDocs;
+		}
+	}
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -11965,23 +12025,19 @@ int ExtRanker_ProximityBM25_c::GetMatches ( int iFields, const int * pWeights )
 	int iMatches = 0;
 	const ExtHit_t * pHlist = m_pHitlist;
 	const ExtDoc_t * pDocs = m_pDoclist;
-	SphDocID_t uMaxID = 0;
 
 	// warmup if necessary
 	if ( !pHlist )
 	{
-		if ( !pDocs ) pDocs = m_pRoot->GetDocsChunk ( &uMaxID );
+		if ( !pDocs ) pDocs = GetFilteredDocs ();
 		if ( !pDocs ) return iMatches;
 
-		pHlist = m_pRoot->GetHitsChunk ( pDocs, uMaxID );
+		pHlist = m_pRoot->GetHitsChunk ( pDocs, m_uMaxID );
 		if ( !pHlist ) return iMatches;
 	}
 
 	// main matching loop
 	const ExtDoc_t * pDoc = pDocs;
-	float uCurTFIDF = 0.0f;
-	CSphRowitem * pCurDocinfo = NULL;
-
 	for ( SphDocID_t uCurDocid=0; iMatches<ExtNode_i::MAX_DOCS; )
 	{
 		assert ( pHlist );
@@ -11993,7 +12049,7 @@ int ExtRanker_ProximityBM25_c::GetMatches ( int iFields, const int * pWeights )
 			if ( pHlist->m_uDocid==DOCID_MAX )
 			{
 				assert ( pDocs );
-				pHlist = m_pRoot->GetHitsChunk ( pDocs, uMaxID );
+				pHlist = m_pRoot->GetHitsChunk ( pDocs, m_uMaxID );
 				if ( pHlist )
 					continue;
 			}
@@ -12002,18 +12058,19 @@ int ExtRanker_ProximityBM25_c::GetMatches ( int iFields, const int * pWeights )
 			if ( uCurDocid )
 			{
 				uCurLCS = 0;
+				iExpDelta = -1;
+
 				DWORD uRank = 0;
 				for ( int i=0; i<iFields; i++ )
 				{
 					uRank += uLCS[i]*pWeights[i];
 					uLCS[i] = 0;
 				}
-				m_dMatches[iMatches].m_iDocID = uCurDocid;
-				m_dMatches[iMatches].m_iWeight = uRank*SPH_BM25_SCALE + int( (uCurTFIDF+0.5f)*SPH_BM25_SCALE );
-				if ( pCurDocinfo )
-					memcpy ( m_dMatches[iMatches].m_pRowitems, pCurDocinfo, m_iInlineRowitems*sizeof(CSphRowitem) );
+
+				assert ( uCurDocid==pDoc->m_uDocid );
+				Swap ( m_dMatches[iMatches], m_dMyMatches[pDoc-m_dMyDocs] );
+				m_dMatches[iMatches].m_iWeight += uRank*SPH_BM25_SCALE;
 				iMatches++;
-				iExpDelta = -1;
 			}
 
 			// boundary checks
@@ -12021,14 +12078,14 @@ int ExtRanker_ProximityBM25_c::GetMatches ( int iFields, const int * pWeights )
 			{
 				// there are no more hits for current docs block; do we have a next one?
 				assert ( pDocs );
-				pDoc = pDocs = m_pRoot->GetDocsChunk ( &uMaxID );
+				pDoc = pDocs = GetFilteredDocs ();
 
 				// we don't, so bail out
 				if ( !pDocs )
 					break;
 
 				// we do, get some hits
-				pHlist = m_pRoot->GetHitsChunk ( pDocs, uMaxID );
+				pHlist = m_pRoot->GetHitsChunk ( pDocs, m_uMaxID );
 				assert ( pHlist ); // fresh docs block, must have hits
 			}
 
@@ -12038,9 +12095,6 @@ int ExtRanker_ProximityBM25_c::GetMatches ( int iFields, const int * pWeights )
 			assert ( pDoc->m_uDocid==pHlist->m_uDocid );
 
 			uCurDocid = pHlist->m_uDocid;
-			uCurTFIDF = pDoc->m_fTFIDF;
-			pCurDocinfo = pDoc->m_pDocinfo;
-
 			continue; // we might had flushed the match; need to check the limit
 		}
 
@@ -12076,15 +12130,15 @@ int ExtRanker_BM25_c::GetMatches ( int iFields, const int * pWeights )
 
 	while ( iMatches<ExtNode_i::MAX_DOCS )
 	{
-		if ( !pDoc || pDoc->m_uDocid==DOCID_MAX ) pDoc = m_pRoot->GetDocsChunk ( NULL );
+		if ( !pDoc || pDoc->m_uDocid==DOCID_MAX ) pDoc = GetFilteredDocs ();
 		if ( !pDoc ) { m_pDoclist = NULL; return iMatches; }
 
 		DWORD uRank = 0;
 		for ( int i=0; i<iFields; i++ )
 			uRank += ( (pDoc->m_uFields>>i)&1 )*pWeights[i];
 
-		m_dMatches[iMatches].m_iDocID = pDoc->m_uDocid;
-		m_dMatches[iMatches].m_iWeight = uRank*SPH_BM25_SCALE + int( (pDoc->m_fTFIDF+0.5f)*SPH_BM25_SCALE );
+		Swap ( m_dMatches[iMatches], m_dMyMatches[pDoc-m_dMyDocs] ); // OPTIMIZE? can avoid this swap and simply return m_dMyMatches (though in lesser chunks)
+		m_dMatches[iMatches].m_iWeight += uRank*SPH_BM25_SCALE;
 		iMatches++;
 
 		pDoc++;
@@ -12106,13 +12160,12 @@ int ExtRanker_None_c::GetMatches ( int, const int * )
 
 	while ( iMatches<ExtNode_i::MAX_DOCS )
 	{
-		if ( !pDoc || pDoc->m_uDocid==DOCID_MAX ) pDoc = m_pRoot->GetDocsChunk ( NULL );
+		if ( !pDoc || pDoc->m_uDocid==DOCID_MAX ) pDoc = GetFilteredDocs ();
 		if ( !pDoc ) { m_pDoclist = NULL; return iMatches; }
 
-		m_dMatches[iMatches].m_iDocID = pDoc->m_uDocid;
+		Swap ( m_dMatches[iMatches], m_dMyMatches[pDoc-m_dMyDocs] ); // OPTIMIZE? can avoid this swap and simply return m_dMyMatches (though in lesser chunks)
 		m_dMatches[iMatches].m_iWeight = 1;
 		iMatches++;
-
 		pDoc++;
 	}
 
@@ -12135,7 +12188,7 @@ int ExtRanker_Wordcount_c::GetMatches ( int, const int * pWeights )
 	// warmup if necessary
 	if ( !pHlist )
 	{
-		if ( !pDocs ) pDocs = m_pRoot->GetDocsChunk ( &uMaxID );
+		if ( !pDocs ) pDocs = GetFilteredDocs ();
 		if ( !pDocs ) return iMatches;
 
 		pHlist = m_pRoot->GetHitsChunk ( pDocs, uMaxID );
@@ -12164,7 +12217,8 @@ int ExtRanker_Wordcount_c::GetMatches ( int, const int * pWeights )
 			// otherwise (new match or no next hits block), flush current doc
 			if ( uCurDocid )
 			{
-				m_dMatches[iMatches].m_iDocID = uCurDocid;
+				assert ( pDoc->m_uDocid==uCurDocid );
+				Swap ( m_dMatches[iMatches], m_dMyMatches[pDoc-m_dMyDocs] );
 				m_dMatches[iMatches].m_iWeight = uRank;
 				iMatches++;
 				uRank = 0;
@@ -12175,7 +12229,7 @@ int ExtRanker_Wordcount_c::GetMatches ( int, const int * pWeights )
 			{
 				// there are no more hits for current docs block; do we have a next one?
 				assert ( pDocs );
-				pDoc = pDocs = m_pRoot->GetDocsChunk ( &uMaxID );
+				pDoc = pDocs = GetFilteredDocs ();
 
 				// we don't, so bail out
 				if ( !pDocs )
@@ -12302,14 +12356,7 @@ bool CSphIndex_VLN::MatchExtended ( const CSphQuery * pQuery, CSphQueryResult * 
 
 		for ( int i=0; i<iMatches; i++ )
 		{
-			CSphMatch & tMatch = pRoot->m_dMatches[i];
-
-			// early reject by group id, doc id or timestamp
-			if ( EarlyReject ( tMatch, pQuery ) )
-				continue;
-
-			// submit
-			SPH_SUBMIT_MATCH ( tMatch );
+			SPH_SUBMIT_MATCH ( pRoot->m_dMatches[i] );
 		}
 	}
 
@@ -13522,6 +13569,7 @@ bool CSphIndex_VLN::MultiQuery ( ISphTokenizer * pTokenizer, CSphDict * pDict, C
 	tTermSetup.m_iToCalc = pResult->m_tSchema.GetRowSize() - m_tSchema.GetRowSize();
 	if ( pQuery->m_uMaxQueryMsec>0 )
 		tTermSetup.m_uMaxStamp = sphTimerMsec() + pQuery->m_uMaxQueryMsec; // max_query_time
+	tTermSetup.m_pQuery = pQuery; // for extended2 filtering only
 
 	PROFILE_END ( query_init );
 
