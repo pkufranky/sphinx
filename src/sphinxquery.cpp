@@ -1165,7 +1165,12 @@ bool CSphExtendedQueryParser::Parse ( CSphExtendedQuery & tParsed, const char * 
 			{
 				m_dStack.Last().m_pNode->m_tAtom.m_iMaxDistance = iProx;
 				if ( dState.Last()==XQS_QUORUM )
+				{
 					m_dStack.Last().m_pNode->m_tAtom.m_bQuorum = true;
+					if ( m_dStack.Last().m_pNode->m_tAtom.m_dWords.GetLength()>=32 ) // FIXME! must be in sync with eval engine
+						return Error ( "too many keywords in the quorum operator (max=32)" );
+				}
+
 			} else
 				bRedo = true;
 
