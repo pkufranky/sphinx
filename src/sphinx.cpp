@@ -3190,7 +3190,7 @@ BYTE * CSphTokenizerTraits<IS_UTF8>::GetTokenSyn ()
 			// handle specials at the very word start
 			if ( ( iFolded & FLAG_CODEPOINT_SPECIAL ) && m_iAccum==0 )
 			{
-				m_bWasSpecial = true;
+				m_bWasSpecial = !( iFolded & FLAG_CODEPOINT_NGRAM );
 
 				AccumCodepoint ( iFolded & MASK_CODEPOINT );
 				*m_pAccum = '\0';
@@ -3802,7 +3802,6 @@ BYTE * CSphTokenizer_UTF8::GetToken ()
 		bool bSpecial =
 			( iCode & FLAG_CODEPOINT_SPECIAL ) &&
 			!( ( iCode & FLAG_CODEPOINT_DUAL ) && m_iAccum );
-		iCode &= MASK_CODEPOINT;
 
 		if ( bSpecial )
 		{
@@ -3818,9 +3817,9 @@ BYTE * CSphTokenizer_UTF8::GetToken ()
 
 			if ( m_iAccum==0 )
 			{
-				m_bWasSpecial = true;
+				m_bWasSpecial = !( iCode & FLAG_CODEPOINT_NGRAM );
 				m_pTokenStart = pCur;
-				AccumCodepoint ( iCode ); // handle special as a standalone token
+				AccumCodepoint ( iCode & MASK_CODEPOINT ); // handle special as a standalone token
 			}
 			else
 				m_pCur = pCur; // we need to flush current accum and then redo special char again
@@ -3833,7 +3832,7 @@ BYTE * CSphTokenizer_UTF8::GetToken ()
 			m_pTokenStart = pCur;
 
 		// just accumulate
-		AccumCodepoint ( iCode );
+		AccumCodepoint ( iCode & MASK_CODEPOINT );
 	}
 }
 
