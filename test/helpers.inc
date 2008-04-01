@@ -360,11 +360,39 @@ class SphinxConfig
 				$res["sortmode_s" ] = $sortmode_s;
 				$res["sortby"] = $q->getAttribute("sortby");
 
+				// groupby
+				$groupfunc = 0;
+				$groupfunc_s = $q->getAttribute("groupfunc");
+				switch ( $groupfunc_s )
+				{
+					case "":			$groupfunc_s = "(default)"; break;
+					case "day":			$groupfunc = SPH_GROUPBY_DAY; break;
+					case "week":		$groupfunc = SPH_GROUPBY_WEEK; break;
+					case "month":		$groupfunc = SPH_GROUPBY_MONTH; break;
+					case "year":		$groupfunc = SPH_GROUPBY_YEAR; break;
+					case "attr":		$groupfunc = SPH_GROUPBY_ATTR; break;
+					case "attrpair":	$groupfunc = SPH_GROUPBY_ATTRPAIR; break;
+					default:
+						printf ( "$config_file: unknown groupby func '%s'\n", $groupfunc_s );
+						return false;
+				}
+
+				$res["groupfunc"] = $groupfunc;
+				$res["groupfunc_s"] = $groupfunc_s;
+				$res["groupattr"] = $q->getAttribute("groupattr");
+				$groupsort = $q->getAttribute("groupsort");
+				if ( $groupsort == "" )
+					$groupsort = "@group desc";
+
+				$res["groupsort"] = $groupsort;
+
+				$res["resarray"] = $q->getAttribute("resarray");
+
 				// add query
 				$this->_queries[] = $res;
 			}
-
-		} else
+		}
+		else
 		{
 			// legacy
 			$qs = array ();
@@ -418,8 +446,12 @@ class SphinxConfig
 				{
 					if ( @$qinfo["mode"] )		$cl->SetMatchMode ( $qinfo["mode"] );
 					if ( @$qinfo["sortmode"] )	$cl->SetSortMode ( $qinfo["sortmode"], $qinfo["sortby"] );
-					if ( @$qinfo["filter"] )		$cl->SetFilter ( $qinfo["filter"], array ( $qinfo["filtervalue"] ) );
+					if ( @$qinfo["filter"] )	$cl->SetFilter ( $qinfo["filter"], array ( $qinfo["filtervalue"] ) );
+					if ( @$qinfo["groupattr"] )	$cl->SetGroupBy ( $qinfo["groupattr"], $qinfo["groupfunc"], $qinfo["groupsort"] );
+					if ( @$qinfo["resarray"] )	$cl->SetArrayResult ( true );
 	            	$results = $cl->Query ( $query, $index );
+					if ( @$qinfo["resarray"] )
+						$results ["resarray"] = 1;
 
             	} else
 				{
@@ -562,9 +594,15 @@ class SphinxConfig
 
 		$qinfo = $this->_queries[$nquery-1];
 		$str = "--- Query $nquery (mode=$qinfo[mode_s]) ---\n";
+
+		if ( @$qinfo["groupattr"] )
+			$str .= "GroupBy: attr: '".$qinfo["groupattr"]."' func: '".$qinfo["groupfunc_s"]."' sort: '".$qinfo["groupsort"]."'\n";
+
 		$str .= "Query '$result[query]': retrieved $result[total_found] of $result[total] matches in $result[time] sec.\n";
 		if ( $result["warning"] )
 			$str .= "Warning: $result[warning]\n";
+
+		$array_result = @$result["resarray"];
 
 		if ( isset($result["words"]) && is_array($result["words"]) )
 		{
@@ -584,13 +622,21 @@ class SphinxConfig
 			$str .= "Matches:\n";
 			foreach ( $result ["matches"] as $doc => $docinfo )
 			{
+				if ( $array_result )
+					$doc_id = $docinfo ["id"];
+				else
+					$doc_id = $doc;
+
 				$weight = $docinfo ["weight"];
 
-				$str .= "$n. doc_id=$doc, weight=$weight";
+				$str .= "$n. doc_id=$doc_id, weight=$weight";
+
+				if ( @$qinfo["groupattr"] )
+					$str .= " @groupby=".$docinfo ["attrs"]["@groupby"]." @count=".$docinfo ["attrs"]["@count"];
 
 				if ( empty ( $this->_query_attributes ) )
 				{
-					$query_res = mysql_query ( "select * from test_table where document_id = $doc" );
+					$query_res = mysql_query ( "select * from test_table where document_id = $doc_id" );
 
 					if ( $query_res === FALSE )
 						$str .= "\n";
@@ -675,8 +721,8 @@ class SphinxConfig
 				continue;
 			}
 
-			$result_f_cur = $this->FormatResultSet ( $nquery, $this->_results[$nquery] );
-			$result_f_ref = $this->FormatResultSet ( $nquery, $ref );
+			$result_f_cur = $this->FormatResultSet ( $nquery + 1, $this->_results[$nquery] );
+			$result_f_ref = $this->FormatResultSet ( $nquery + 1, $ref );
 
 			file_put_contents ( "current", $result_f_cur );
 			file_put_contents ( "reference", $result_f_ref );
