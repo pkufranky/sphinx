@@ -351,6 +351,7 @@ class SphinxConfig
 				switch ( $sortmode_s )
 				{
 					case "":			$sortmode_s = "(default)"; break;
+					case "extended":	$sortmode = SPH_SORT_EXTENDED; break;
 					case "expr":		$sortmode = SPH_SORT_EXPR; break;
 					default:
 						printf ( "$config_file: unknown sorting mode '%s'\n", $sortmode_s );
@@ -387,6 +388,7 @@ class SphinxConfig
 				$res["groupsort"] = $groupsort;
 
 				$res["resarray"] = $q->getAttribute("resarray");
+				$res["index"] = $q->getAttribute("index");
 
 				// add query
 				$this->_queries[] = $res;
@@ -444,16 +446,19 @@ class SphinxConfig
 				$results = 0;
 				if ( empty($this->_query_settings) )
 				{
+					$my_index = $index;
 					if ( @$qinfo["mode"] )		$cl->SetMatchMode ( $qinfo["mode"] );
 					if ( @$qinfo["sortmode"] )	$cl->SetSortMode ( $qinfo["sortmode"], $qinfo["sortby"] );
 					if ( @$qinfo["filter"] )	$cl->SetFilter ( $qinfo["filter"], array ( $qinfo["filtervalue"] ) );
 					if ( @$qinfo["groupattr"] )	$cl->SetGroupBy ( $qinfo["groupattr"], $qinfo["groupfunc"], $qinfo["groupsort"] );
 					if ( @$qinfo["resarray"] )	$cl->SetArrayResult ( true );
-	            	$results = $cl->Query ( $query, $index );
+					if ( @$qinfo["index"] )		$my_index = $qinfo["index"];
+
+	            	$results = $cl->Query ( $query, $my_index );
 					if ( @$qinfo["resarray"] )
 						$results ["resarray"] = 1;
-
-            	} else
+                }
+				else
 				{
 					$run_func = create_function( '$client, $query, $index, &$results', $this->_query_settings );
 					$run_func ( $cl, $query, $index, $results ); 
@@ -598,6 +603,9 @@ class SphinxConfig
 		if ( @$qinfo["groupattr"] )
 			$str .= "GroupBy: attr: '".$qinfo["groupattr"]."' func: '".$qinfo["groupfunc_s"]."' sort: '".$qinfo["groupsort"]."'\n";
 
+		if ( @$qinfo["sortmode"] == SPH_SORT_EXPR )
+			$str .= "Sort: expr: ".$qinfo["sortby"]."\n";
+
 		$str .= "Query '$result[query]': retrieved $result[total_found] of $result[total] matches in $result[time] sec.\n";
 		if ( $result["warning"] )
 			$str .= "Warning: $result[warning]\n";
@@ -631,9 +639,6 @@ class SphinxConfig
 
 				$str .= "$n. doc_id=$doc_id, weight=$weight";
 
-				if ( @$qinfo["groupattr"] )
-					$str .= " @groupby=".$docinfo ["attrs"]["@groupby"]." @count=".$docinfo ["attrs"]["@count"];
-
 				if ( empty ( $this->_query_attributes ) )
 				{
 					$query_res = mysql_query ( "select * from test_table where document_id = $doc_id" );
@@ -649,9 +654,12 @@ class SphinxConfig
 								if ( array_search ( $col_name, $result ["fields"] ) !== FALSE )
 								   	$str .= " $col_name=\"$col_content\"";
 							}
-
-							$str .= "\n";
 				    	}
+
+						foreach ( $docinfo ["attrs"] as $attr => $value )
+						   	$str .= " $attr=\"$value\"";
+
+						$str .= "\n";
 					}
 				}
 				else
