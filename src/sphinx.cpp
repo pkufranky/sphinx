@@ -8035,10 +8035,13 @@ protected:
 SphWordID_t CSphDictStar::GetWordID ( BYTE * pWord )
 {
 	char sBuf [ 16+3*SPH_MAX_WORD_LEN ];
+	assert ( strlen ( (const char*)pWord ) < 16+3*SPH_MAX_WORD_LEN );
 
 	m_pDict->ApplyStemmers ( pWord );
 
 	int iLen = strlen ( (const char*)pWord );
+	assert ( iLen < 16+3*SPH_MAX_WORD_LEN - 1 );
+
 	memcpy ( sBuf, pWord, iLen+1 );
 
 	if ( iLen )
@@ -8085,6 +8088,8 @@ SphWordID_t	CSphDictStarV8::GetWordID ( BYTE * pWord )
 	char sBuf [ 16+3*SPH_MAX_WORD_LEN ];
 
 	int iLen = strlen ( (const char*)pWord );
+	assert ( iLen < 16+3*SPH_MAX_WORD_LEN );
+
 	if ( !iLen )
 		return 0;
 
@@ -8095,6 +8100,8 @@ SphWordID_t	CSphDictStarV8::GetWordID ( BYTE * pWord )
 		m_pDict->ApplyStemmers ( pWord );
 
 	iLen = strlen ( (const char*)pWord );
+	assert ( iLen < 16+3*SPH_MAX_WORD_LEN - 2 );
+
 	if ( !iLen )
 		return 0;
 

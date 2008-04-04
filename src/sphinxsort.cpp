@@ -510,6 +510,7 @@ enum
 {
 	SPH_VATTR_ID			= -1,	///< tells match sorter to use doc id
 	SPH_VATTR_RELEVANCE		= -2,	///< tells match sorter to use match weight
+	SPH_VATTR_FLOAT			= 10000,///< tells match sorter to compare floats
 
 	OFF_POSTCALC_GROUP		= 0,	///< @group attr offset after normal and calculated attrs
 	OFF_POSTCALC_COUNT		= 1,	///< @count attr offset after normal and calculated attrs
@@ -1028,6 +1029,13 @@ struct MatchExpr_fn : public ISphMatchComparator
 	{ \
 		case SPH_VATTR_ID:			SPH_TEST_PAIR ( a.m_iDocID, b.m_iDocID, _idx ); break; \
 		case SPH_VATTR_RELEVANCE:	SPH_TEST_PAIR ( a.m_iWeight, b.m_iWeight, _idx ); break; \
+		case SPH_VATTR_FLOAT: \
+		{ \
+			register float aa = a.GetAttrFloat ( t.m_iRowitem[_idx] ); \
+			register float bb = b.GetAttrFloat ( t.m_iRowitem[_idx] ); \
+			SPH_TEST_PAIR ( aa, bb, _idx ) \
+			break; \
+		} \
 		default: \
 		{ \
 			register SphAttr_t aa = sphGetCompAttr<BITS> ( t, a, _idx ); \
@@ -1345,10 +1353,11 @@ static ESortClauseParseResult sphParseSortClause ( const char * sClause, const C
 				sError.SetSprintf ( "sort-by attribute '%s' not found", pTok );
 				return SORT_CLAUSE_ERROR;
 			}
-			tState.m_iAttr[iField] = iAttr;
-			tState.m_iRowitem[iField] = tSchema.GetAttr(iAttr).m_iRowitem;
-			tState.m_iBitOffset[iField] = tSchema.GetAttr(iAttr).m_iBitOffset;
-			tState.m_iBitCount[iField] = tSchema.GetAttr(iAttr).m_iBitCount;
+			const CSphColumnInfo & tCol = tSchema.GetAttr(iAttr);
+			tState.m_iAttr[iField] = ( tCol.m_eAttrType==SPH_ATTR_FLOAT ) ? SPH_VATTR_FLOAT : iAttr;
+			tState.m_iRowitem[iField] = tCol.m_iRowitem;
+			tState.m_iBitOffset[iField] = tCol.m_iBitOffset;
+			tState.m_iBitCount[iField] = tCol.m_iBitCount;
 		}
 	}
 
