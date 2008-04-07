@@ -386,6 +386,7 @@ class SphinxConfig
 					$groupsort = "@group desc";
 
 				$res["groupsort"] = $groupsort;
+				$res["groupdistinct"] = $q->getAttribute("groupdistinct");
 
 				$res["resarray"] = $q->getAttribute("resarray");
 				$res["index"] = $q->getAttribute("index");
@@ -451,6 +452,7 @@ class SphinxConfig
 					if ( @$qinfo["sortmode"] )	$cl->SetSortMode ( $qinfo["sortmode"], $qinfo["sortby"] );
 					if ( @$qinfo["filter"] )	$cl->SetFilter ( $qinfo["filter"], array ( $qinfo["filtervalue"] ) );
 					if ( @$qinfo["groupattr"] )	$cl->SetGroupBy ( $qinfo["groupattr"], $qinfo["groupfunc"], $qinfo["groupsort"] );
+					if ( @$qinfo["groupdistinct"] )	$cl->SetGroupDistinct ( $qinfo["groupdistinct"] );
 					if ( @$qinfo["resarray"] )	$cl->SetArrayResult ( true );
 					if ( @$qinfo["index"] )		$my_index = $qinfo["index"];
 

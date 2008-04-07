@@ -697,6 +697,8 @@ public:
 		m_iTotal = 0;
 
 		m_hGroup2Match.Reset ();
+		if ( DISTINCT )
+			m_tUniq.Resize ( 0 );
 	}
 
 	/// get entries count

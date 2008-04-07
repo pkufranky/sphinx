@@ -26,6 +26,11 @@ source srctest
 	sql_attr_multi	= uint mva from field;
 }
 
+source srctest2 : srctest
+{
+	sql_query		= SELECT document_id+10, tag+20 AS tag, UNIX_TIMESTAMP(time) as time, mva, body FROM test_table
+}
+
 index test
 {
 	source			= srctest
@@ -35,20 +40,30 @@ index test
 	enable_star		= 1
     charset_type 	= utf-8
 }
+
+index test2 : test
+{
+	source			= srctest2
+	path			= <data_path/>/test2
+}
 </config>
 
 <queries>
-<query mode="extended2" groupattr="tag" groupfunc="attr" groupsort="@group desc"></query>
-<query mode="extended2" groupattr="tag" groupfunc="attr" groupsort="@group asc"></query>
-<query mode="extended2" groupattr="tag" groupfunc="attr" groupsort="@count desc"></query>
-<query mode="extended2" groupattr="tag" groupfunc="attr" groupsort="@count asc"></query>
-<query mode="extended2" groupattr="tag" groupfunc="attr" groupsort="tag desc"></query>
-<query mode="extended2" groupattr="time" groupfunc="day">test*</query>
-<query mode="extended2" groupattr="time" groupfunc="week">test*</query>
-<query mode="extended2" groupattr="time" groupfunc="month">test*</query>
-<query mode="extended2" groupattr="time" groupfunc="year">test*</query>
-<query mode="extended2" groupattr="mva" groupfunc="attr" groupsort="@group desc" resarray="1">test*</query>
-<query mode="extended2" groupattr="mva" groupfunc="attr" groupsort="@group asc" resarray="1">test*</query>
+<query mode="extended2" index="test" groupattr="tag" groupfunc="attr" groupsort="@group desc"></query>
+<query mode="extended2" index="test" groupattr="tag" groupfunc="attr" groupsort="@group asc"></query>
+<query mode="extended2" index="test" groupattr="tag" groupfunc="attr" groupsort="@count desc"></query>
+<query mode="extended2" index="test" groupattr="tag" groupfunc="attr" groupsort="@count asc"></query>
+<query mode="extended2" index="test" groupattr="tag" groupfunc="attr" groupsort="tag desc"></query>
+<query mode="extended2" index="test" groupattr="time" groupfunc="day">test*</query>
+<query mode="extended2" index="test" groupattr="time" groupfunc="week">test*</query>
+<query mode="extended2" index="test" groupattr="time" groupfunc="month">test*</query>
+<query mode="extended2" index="test" groupattr="time" groupfunc="year">test*</query>
+<query mode="extended2" index="test" groupattr="mva" groupfunc="attr" groupsort="@group desc" resarray="1">test*</query>
+<query mode="extended2" index="test" groupattr="mva" groupfunc="attr" groupsort="@group asc" resarray="1">test*</query>
+
+<query mode="extended2" index="test" groupattr="time" groupfunc="year" groupdistinct="tag"></query>
+<query mode="extended2" index="test2" groupattr="time" groupfunc="year" groupdistinct="tag"></query>
+<query mode="extended2" index="test,test2" groupattr="time" groupfunc="year" groupdistinct="tag"></query>
 </queries>
 
 <db_create>
