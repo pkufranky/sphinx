@@ -1221,7 +1221,8 @@ bool CSphExtendedQueryParser::Parse ( CSphExtendedQuery & tParsed, const char * 
 			if ( !ParseFields ( uFields, pMyTokenizer.Ptr (), pSchema ) )
 				return false;
 
-			uFields &= ( 1UL << pSchema->m_dFields.GetLength () ) - 1;
+			if ( pSchema->m_dFields.GetLength () != 32 )
+				uFields &=  ( 1UL << pSchema->m_dFields.GetLength () ) - 1;
 			continue;
 		}
 
