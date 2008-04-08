@@ -15388,12 +15388,14 @@ void CSphHTMLStripper::Strip ( BYTE * sData )
 				char cEnd = *s;
 				s++;
 				while ( *s && *s!=cEnd ) *d++ = *s++;
+				*d++ = ' ';
 				if ( *s==cEnd ) s++;
 				continue;
 			}
 
 			// handle unquoted value
 			while ( *s && !isspace(*s) && *s!='>' ) *d++ = *s++;
+			*d++ = ' ';
 		}
 		if ( *s=='>' ) s++;
 

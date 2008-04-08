@@ -335,7 +335,7 @@ void TestStripper ()
 	{
 		// source-data, index-attrs, remove-elements, expected-results
 		{ "<html>trivial test</html>", "", "", " trivial test " },
-		{ "<html>lets <img src=\"g/smth.jpg\" alt=\"nice picture\"> index attrs</html>", "img=alt", "", " lets nice picture index attrs " },
+		{ "<html>lets <img src=\"g/smth.jpg\" alt=\"nice picture\">index attrs</html>", "img=alt", "", " lets nice picture index attrs " },
 		{ "<html>   lets  also<script> whatever here; a<b</script>remove scripts", "", "script, style", "    lets  also remove scripts" },
 		{ "testing in<b><font color='red'>line</font> ele<em>men</em>ts", "", "", "testing inline elements" },
 		{ "testing non<p>inline</h1>elements", "", "", "testing non inline elements" },
@@ -343,7 +343,8 @@ void TestStripper ()
 		{ "testing &#1040;&#1041;&#1042; utf encoding", "", "", "testing \xD0\x90\xD0\x91\xD0\x92 utf encoding" },
 		{ "testing <1 <\" <\x80 <\xe0 <\xff </3 malformed tags", "", "", "testing <1 <\" <\x80 <\xe0 <\xff </3 malformed tags" },
 		{ "testing comm<!--comm-->ents", "", "", "testing comments" },
-		{ "&lt; &gt; &thetasym; &somethingverylong; &the", "", "", "< > \xCF\x91 &somethingverylong; &the" }
+		{ "&lt; &gt; &thetasym; &somethingverylong; &the", "", "", "< > \xCF\x91 &somethingverylong; &the" },
+		{ "testing <img src=\"g/smth.jpg\" alt=\"nice picture\" rel=anotherattr junk=throwaway>inline tags vs attr indexing", "img=alt,rel", "", "testing nice picture anotherattr inline tags vs attr indexing" }
 	};
 
 	for ( int iTest=0; iTest<(int)(sizeof(sTests)/sizeof(sTests[0])); iTest++ )
