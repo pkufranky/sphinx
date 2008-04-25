@@ -383,6 +383,9 @@ public:
 	/// calc codepoint length
 	virtual int						GetCodepointLength ( int iCode ) const = 0;
 
+	/// handle tokens less than min_word_len if they match filter
+	inline void						EnableQueryParserMode ( bool bEnable ) { m_bShortTokenFilter = bEnable; }
+
 	/// get last token length, in codepoints
 	inline int						GetLastTokenLen () { return m_iLastTokenLen; }
 
@@ -434,6 +437,7 @@ protected:
 	bool							m_bWasSpecial;				///< special token flag
 	bool							m_bEscaped;					///< backslash handling flag
 	int								m_iOvershortCount;			///< skipped overshort tokens count
+	bool							m_bShortTokenFilter;		///< short token filter flag
 
 	CSphVector<CSphSynonym>			m_dSynonyms;				///< active synonyms
 	CSphVector<int>					m_dSynStart;				///< map 1st byte to candidate range start

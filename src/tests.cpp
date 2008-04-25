@@ -195,6 +195,39 @@ void TestTokenizer ( bool bUTF8, bool bEscaped = false )
 		assert ( !strcmp ( (char*)pTokenizer->GetToken(), sTok4 ) );
 		assert ( pTokenizer->GetToken()==NULL );
 
+		// test short word callbacks
+		printf ( "%s for short token handling\n", sPrefix );
+		ISphTokenizer * pShortTokenizer = pTokenizer->Clone ( bEscaped );
+		CSphRemapRange tStar ( '*', '*', '*' );
+		pShortTokenizer->AddCaseFolding ( tStar );
+		pShortTokenizer->SetMinWordLen ( 5 );
+		pShortTokenizer->EnableQueryParserMode ( true );
+
+		char * dTestsShort[] =
+		{
+			"ab*",		"ab*",		NULL,
+			"*ab",		"*ab",		NULL,
+			"abcdef",	"abcdef",	NULL,
+			"ab *ab* abc", "*ab*",	NULL,
+			NULL
+		};
+
+		for ( int iCur=0; dTestsShort[iCur]; )
+		{
+			pShortTokenizer->SetBuffer ( (BYTE*)(dTestsShort [iCur]), strlen ( (const char*)dTestsShort [iCur] ) );
+			iCur++;
+			for ( BYTE * pToken=pShortTokenizer->GetToken(); pToken; pToken=pShortTokenizer->GetToken() )
+			{
+				assert ( dTestsShort[iCur] && strcmp ( (const char*)pToken, dTestsShort[iCur] )==0 );
+				iCur++;
+			}
+
+			assert ( !dTestsShort [iCur] );
+			iCur++;
+		}
+
+		SafeDelete ( pShortTokenizer );
+
 		// test uberlong synonym-only tokens
 		if ( iRun==2 )
 		{

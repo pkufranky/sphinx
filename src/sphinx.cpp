@@ -2714,6 +2714,13 @@ int sphUTF8Len ( const char * pStr )
 	return iRes;
 }
 
+
+static inline bool ShortTokenFilter ( BYTE * pToken, int iLen )
+{
+	return pToken [0] == '*' || ( iLen > 0 && pToken [iLen-1] == '*' );
+}
+
+
 /////////////////////////////////////////////////////////////////////////////
 
 ISphTokenizer::ISphTokenizer ()
@@ -2724,6 +2731,7 @@ ISphTokenizer::ISphTokenizer ()
 	, m_bWasSpecial ( false )
 	, m_bEscaped ( false )
 	, m_iOvershortCount ( 0 )
+	, m_bShortTokenFilter ( false )
 {}
 
 
@@ -3439,8 +3447,23 @@ BYTE * CSphTokenizerTraits<IS_UTF8>::GetTokenSyn ()
 		// return accumulated token
 		if ( m_iAccum<m_iMinWordLen )
 		{
+			if ( m_bShortTokenFilter )
+			{
+				*m_pAccum = '\0';
+
+				if ( ShortTokenFilter ( m_sAccum, m_iAccum ) )
+				{
+					m_iLastTokenLen = m_iAccum;
+					m_pTokenEnd = pCur;
+					m_iAccum = 0;
+					return m_sAccum;
+				}
+			}
+
 			if ( m_iAccum )
 				m_iOvershortCount++;
+
+			m_iAccum = 0;
 			continue;
 		}
 
@@ -3587,10 +3610,21 @@ BYTE * CSphTokenizer_SBCS::GetToken ()
 			pCur = m_pCur;
 			if ( m_iAccum<m_iMinWordLen )
 			{
-				m_bBoundary = m_bTokenBoundary = false;
-				m_iAccum = 0;
-				m_iLastTokenLen = 0;
-				return NULL;
+				bool bShortToken = false;
+				if ( m_bShortTokenFilter )
+				{
+					m_sAccum [m_iAccum] = '\0';
+					if ( ShortTokenFilter ( m_sAccum, m_iAccum ) )
+						bShortToken = true;
+				}
+
+				if ( !bShortToken )
+				{
+					m_bBoundary = m_bTokenBoundary = false;
+					m_iAccum = 0;
+					m_iLastTokenLen = 0;
+					return NULL;
+				}
 			}
 		} else
 		{
@@ -3624,10 +3658,22 @@ BYTE * CSphTokenizer_SBCS::GetToken ()
 		{
 			if ( m_iAccum<m_iMinWordLen )
 			{
-				if ( m_iAccum )
-					m_iOvershortCount++;
-				m_iAccum = 0;
-				continue;
+				bool bShortToken = false;
+				if ( m_bShortTokenFilter )
+				{
+					m_sAccum[m_iAccum] = '\0';
+					if ( ShortTokenFilter ( m_sAccum, m_iAccum ) )
+						bShortToken = true;
+				}
+
+				if ( !bShortToken )
+				{
+					if ( m_iAccum )
+						m_iOvershortCount++;
+
+					m_iAccum = 0;
+					continue;
+				}
 			}
 
 			m_iLastTokenLen = m_iAccum;
@@ -3649,9 +3695,24 @@ BYTE * CSphTokenizer_SBCS::GetToken ()
 			// skip short words
 			if ( m_iAccum<m_iMinWordLen )
 			{
-				m_iAccum = 0;
 				if ( m_iAccum )
 					m_iOvershortCount++;
+
+				bool bShortToken = false;
+				if ( m_bShortTokenFilter )
+				{
+					m_sAccum[m_iAccum] = '\0';
+					if ( ShortTokenFilter ( m_sAccum, m_iAccum ) )
+						bShortToken = true;
+				}
+
+				if ( !bShortToken )
+				{
+					if ( m_iAccum )
+						m_iOvershortCount++;
+
+					m_iAccum = 0;
+				}
 			}
 
 			m_pTokenEnd = m_pCur;
@@ -3751,8 +3812,12 @@ BYTE * CSphTokenizer_UTF8::GetToken ()
 			FlushAccum ();
 			if ( m_iLastTokenLen<m_iMinWordLen )
 			{
-				m_iLastTokenLen = 0;
-				return NULL;
+				
+				if ( !m_bShortTokenFilter || !ShortTokenFilter ( m_sAccum, m_iLastTokenLen ) )
+				{
+					m_iLastTokenLen = 0;
+					return NULL;
+				}
 			}
 
 			// return trailing word
@@ -3786,9 +3851,18 @@ BYTE * CSphTokenizer_UTF8::GetToken ()
 			FlushAccum ();
 			if ( m_iLastTokenLen<m_iMinWordLen )
 			{
-				if ( m_iLastTokenLen )
-					m_iOvershortCount++;
-				continue;
+				if ( m_bShortTokenFilter && ShortTokenFilter ( m_sAccum, m_iLastTokenLen ) )
+				{
+					m_pTokenEnd = pCur;
+					return m_sAccum;
+				}
+				else
+				{
+					if ( m_iLastTokenLen )
+						m_iOvershortCount++;
+
+					continue;
+				}
 			}
 			else
 			{
@@ -3808,9 +3882,15 @@ BYTE * CSphTokenizer_UTF8::GetToken ()
 			// skip short words preceding specials
 			if ( m_iAccum<m_iMinWordLen )
 			{
-				if ( m_iAccum )
-					m_iOvershortCount++;
-				FlushAccum ();
+				m_sAccum[m_iAccum] = '\0';
+
+				if ( !m_bShortTokenFilter || !ShortTokenFilter ( m_sAccum, m_iAccum ) )
+				{
+					if ( m_iAccum )
+						m_iOvershortCount++;
+
+					FlushAccum ();
+				}
 			}
 
 			m_pTokenEnd = m_pCur;
@@ -8180,7 +8260,12 @@ struct CSphSimpleQueryParser
 		int				m_iQueryPos;
 	} m_dWords [ SPH_MAX_QUERY_WORDS ];
 
-	CSphSimpleQueryParser () {}
+	bool m_bUseStarDict;
+
+	CSphSimpleQueryParser ( bool bStarDict )
+		: m_bUseStarDict ( bStarDict )
+	{
+	}
 
 	int Parse ( const char * sQuery, ISphTokenizer * pTokenizer, CSphDict * pDict )
 	{
@@ -8190,6 +8275,9 @@ struct CSphSimpleQueryParser
 
 		CSphString sQbuf ( sQuery );
 		pTokenizer->SetBuffer ( (BYTE*)sQbuf.cstr(), strlen(sQuery) );
+
+		if ( m_bUseStarDict )
+			pTokenizer->EnableQueryParserMode ( true );
 
 		int iWords = 0;
 		int iPos = 0;
@@ -8211,6 +8299,9 @@ struct CSphSimpleQueryParser
 					iPos++; // advance position on stopwords, but not at the very start
 			}
 		}
+
+		if ( m_bUseStarDict )
+			pTokenizer->EnableQueryParserMode ( false );
 
 		return iWords;
 	}
@@ -13564,7 +13655,13 @@ bool CSphIndex_VLN::MultiQuery ( ISphTokenizer * pTokenizer, CSphDict * pDict, C
 	}
 
 	CSphScopedPtr<CSphDict> tDict ( NULL );
-	pDict = SetupStarDict  ( pTokenizer, pDict, tDict );
+	CSphDict * pStarDict = SetupStarDict  ( pTokenizer, pDict, tDict );
+	bool bUseStarDict = false;
+	if ( pStarDict != pDict )
+	{
+		bUseStarDict = true;
+		pDict = pStarDict;
+	}
 
 	// setup calculations and result schema
 	if ( !SetupCalc ( pResult, pQuery ) )
@@ -13598,7 +13695,7 @@ bool CSphIndex_VLN::MultiQuery ( ISphTokenizer * pTokenizer, CSphDict * pDict, C
 		|| pQuery->m_eMode==SPH_MATCH_FULLSCAN );
 	if ( bSimpleQuery && pQuery->m_eMode!=SPH_MATCH_FULLSCAN )
 	{
-		CSphSimpleQueryParser qp;
+		CSphSimpleQueryParser qp ( bUseStarDict ) ;
 		int iRealWords = qp.Parse ( pQuery->m_sQuery.cstr(), pTokenizer, pDict );
 		if ( !iRealWords )
 		{

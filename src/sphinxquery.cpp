@@ -220,6 +220,7 @@ CSphBooleanQueryExpr * CSphBooleanQueryParser::Parse ( const char * sQuery, cons
 	CSphScopedPtr<ISphTokenizer> pMyTokenizer ( pTokenizer->Clone ( true ) );
 	pMyTokenizer->AddSpecials ( "&|()-!" );
 	pMyTokenizer->SetBuffer ( (BYTE*)sBuffer.cstr(), strlen ( sBuffer.cstr() ) );
+	pMyTokenizer->EnableQueryParserMode ( true );
 
 	// iterate all tokens
 	const int QUERY_END = -1;
@@ -1039,6 +1040,7 @@ bool CSphExtendedQueryParser::Parse ( CSphExtendedQuery & tParsed, const char * 
 	CSphString sBuffer ( sQuery );
 	CSphScopedPtr<ISphTokenizer> pMyTokenizer ( pTokenizer->Clone ( true ) );
 	pMyTokenizer->AddSpecials ( "()|-!@~\"/" );
+	pMyTokenizer->EnableQueryParserMode ( true );
 	pMyTokenizer->SetBuffer ( (BYTE*)sBuffer.cstr(), strlen ( sBuffer.cstr() ) );
 
 	// iterate all tokens
