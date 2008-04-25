@@ -16343,6 +16343,8 @@ BYTE ** CSphSource_SQL::NextDocument ( CSphString & sError )
 				continue;
 			}
 
+			SqlDismissResult ();
+
 			// ok, we're over
 			ARRAY_FOREACH ( i, m_tParams.m_dQueryPost )
 			{
