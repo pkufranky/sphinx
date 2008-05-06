@@ -17410,6 +17410,7 @@ private:
 	void			ConfigureFields ( const CSphVariant * pHead );
 	void			AddFieldToSchema ( const char * szName );
 	void			SetupFieldMatch ( CSphColumnInfo & tCol );
+	void			UnexpectedCharaters ( const char * pCharacters, int iLen, const char * szComment );
 
 #if USE_LIBEXPAT
 	bool			ParseNextChunk ( int iBufferLen, CSphString & sError );
@@ -18226,10 +18227,58 @@ void CSphSource_XMLPipe2::EndElement ( const char * szName )
 }
 
 
+void CSphSource_XMLPipe2::UnexpectedCharaters ( const char * pCharacters, int iLen, const char * szComment )
+{
+	const int MAX_WARNING_LENGTH = 64;
+
+	bool bSpaces = true;
+	for ( int i = 0; i < iLen && bSpaces; i++ )
+		if ( !sphIsSpace ( pCharacters [i] ) )
+			bSpaces = false;
+
+	if ( !bSpaces )
+	{
+		CSphString sWarning;
+#if USE_LIBEXPAT
+		sWarning.SetBinary ( pCharacters, Min ( iLen, MAX_WARNING_LENGTH ) );
+		sphWarn ( "source '%s': unexpected string '%s' (line=%d, pos=%d) %s",
+			m_tSchema.m_sName.cstr(), sWarning.cstr (),
+			XML_GetCurrentLineNumber(m_pParser), XML_GetCurrentColumnNumber(m_pParser), szComment );
+#endif
+
+#if USE_LIBXML
+		int i = 0;
+		for ( i = 0; i < iLen && sphIsSpace ( pCharacters [i] ); i++ );
+		sWarning.SetBinary ( pCharacters + i, Min ( iLen - i, MAX_WARNING_LENGTH ) );
+		for ( i = iLen - i - 1; i >= 0 && sphIsSpace ( sWarning.cstr () [i] ); i-- );
+		if ( i >= 0 )
+			((char *) sWarning.cstr ()) [i+1] = '\0';
+
+		sphWarn ( "source '%s': unexpected string '%s' %s", m_tSchema.m_sName.cstr(), sWarning.cstr(), szComment );
+#endif
+	}
+}
+
+
 void CSphSource_XMLPipe2::Characters ( const char * pCharacters, int iLen )
 {
-	if ( m_iCurAttr == -1 && m_iCurField == -1 )
+	if ( !m_bInDocset )
+	{
+		UnexpectedCharaters ( pCharacters, iLen, "outside of <sphinx:docset>" );
 		return;
+	}
+
+	if ( !m_bInSchema && !m_bInDocument )
+	{
+		UnexpectedCharaters ( pCharacters, iLen, "outside of <sphinx:schema> and <sphinx:document>" );
+		return;
+	}
+
+	if ( m_iCurAttr == -1 && m_iCurField == -1 )
+	{
+		UnexpectedCharaters ( pCharacters, iLen, m_bInDocument ? "inside <sphinx:document>" : ( m_bInSchema ? "inside <sphinx:schema>" : "" ) );
+		return;
+	}
 	
 	if ( iLen + m_iFieldBufferLen < MAX_FIELD_LENGTH )
 	{
