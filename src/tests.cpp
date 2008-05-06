@@ -13,6 +13,7 @@
 
 #include "sphinx.h"
 #include "sphinxexpr.h"
+#include "sphinxquery.h"
 #include <math.h>
 
 //////////////////////////////////////////////////////////////////////////
@@ -596,6 +597,110 @@ void BenchExpr ()
 
 //////////////////////////////////////////////////////////////////////////
 
+CSphString ReconstructNode ( const CSphExtendedQueryNode * pNode )
+{
+	CSphString sRes ( "" );
+
+	if ( pNode->IsPlain() )
+	{
+		// say just words to me
+		const CSphExtendedQueryAtom & tAtom = pNode->m_tAtom;
+		const CSphVector<CSphExtendedQueryAtomWord> & dWords = tAtom.m_dWords;
+		ARRAY_FOREACH ( i, dWords )
+			sRes.SetSprintf ( "%s %s", sRes.cstr(), dWords[i].m_sWord.cstr() );
+		sRes.Chop ();
+
+		if ( tAtom.m_bQuorum || tAtom.m_iMaxDistance>0 )
+		{
+			sRes.SetSprintf ( "\"%s\"%c%d", sRes.cstr(), tAtom.m_bQuorum ? '/' : '~', tAtom.m_iMaxDistance ); // quorum or proximity
+		
+		} else if ( dWords.GetLength()>1 )
+		{
+			if ( tAtom.m_iMaxDistance==0 )
+				sRes.SetSprintf ( "\"%s\"", sRes.cstr() ); // phrase
+			else
+				sRes.SetSprintf ( "( %s )", sRes.cstr() ); // just bag of words
+		}
+
+	} else
+	{
+		ARRAY_FOREACH ( i, pNode->m_dChildren )
+		{
+			if ( !i )
+				sRes = ReconstructNode ( pNode->m_dChildren[i] );
+			else
+				sRes.SetSprintf ( "%s %s %s", sRes.cstr(), pNode->m_bAny ? "OR" : "AND", ReconstructNode ( pNode->m_dChildren[i] ).cstr() );
+		}
+
+		if ( pNode->m_dChildren.GetLength()>1 )
+			sRes.SetSprintf ( "( %s )", sRes.cstr() );
+	}
+
+	return sRes;
+}
+
+CSphString ReconstructQuery ( const CSphExtendedQuery & tQuery )
+{
+	CSphString sAccept = ReconstructNode ( tQuery.m_pAccept );
+	CSphString sReject = ReconstructNode ( tQuery.m_pReject );
+
+	if ( !sReject.IsEmpty () )
+		sAccept.SetSprintf ( "( %s ) AND NOT ( %s )", sAccept.cstr(), sReject.cstr() );
+
+	return sAccept;
+}
+
+void TestQueryParser ()
+{
+	CSphString sTmp;
+
+	CSphSchema tSchema;
+	CSphColumnInfo tCol;
+	tCol.m_sName = "title"; tSchema.m_dFields.Add ( tCol );
+	tCol.m_sName = "content"; tSchema.m_dFields.Add ( tCol );
+
+	CSphScopedPtr<ISphTokenizer> pTokenizer ( sphCreateSBCSTokenizer () );
+	CSphScopedPtr<CSphDict> pDict ( sphCreateDictionaryCRC ( NULL, NULL, NULL, pTokenizer.Ptr(), sTmp ) );
+	assert ( pTokenizer.Ptr() );
+	assert ( pDict.Ptr() );
+
+	struct QueryTest_t
+	{
+		const char *	m_sQuery;
+		const char *	m_sReconst;
+	};
+	const QueryTest_t dTest[] =
+	{
+		{ "aaa bbb ccc",					"( aaa AND bbb AND ccc )" },
+		{ "aaa|bbb ccc",					"( ( aaa OR bbb ) AND ccc )" },
+		{ "aaa bbb|ccc",					"( aaa AND ( bbb OR ccc ) )" },
+		{ "aaa (bbb ccc)|ddd",				"( aaa AND ( ( bbb AND ccc ) OR ddd ) )" },
+		{ "aaa bbb|(ccc ddd)",				"( aaa AND ( bbb OR ( ccc AND ddd ) ) )" },
+		{ "aaa bbb|(ccc ddd)|eee|(fff)",	"( aaa AND ( ( ( bbb OR ( ccc AND ddd ) ) OR eee ) OR fff ) )" },
+		{ "aaa bbb|(ccc ddd) eee|(fff)",	"( ( aaa AND ( bbb OR ( ccc AND ddd ) ) ) AND ( eee OR fff ) )" },
+		{ "aaa (ccc ddd)|bbb|eee|(fff)",	"( aaa AND ( ( ( ( ccc AND ddd ) OR bbb ) OR eee ) OR fff ) )" },
+		{ "aaa (ccc ddd)|bbb eee|(fff)",	"( ( aaa AND ( ( ccc AND ddd ) OR bbb ) ) AND ( eee OR fff ) )" },
+		{ "aaa \"bbb ccc\"~5|ddd",			"( aaa AND ( \"bbb ccc\"~5 OR ddd ) )" },
+		{ "aaa bbb|\"ccc ddd\"~5",			"( aaa AND ( bbb OR \"ccc ddd\"~5 ) )" },
+	};
+
+	int nTests = sizeof(dTest)/sizeof(dTest[0]);
+	for ( int i=0; i<nTests; i++ )
+	{
+		printf ( "testing query parser, test %d/%d... ", i+1, nTests );
+
+		CSphExtendedQuery tQuery;
+		sphParseExtendedQuery ( tQuery, dTest[i].m_sQuery, pTokenizer.Ptr(), &tSchema, pDict.Ptr() );
+
+		CSphString sReconst = ReconstructQuery ( tQuery );
+		assert ( sReconst==dTest[i].m_sReconst );
+
+		printf ( "ok\n" );
+	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+
 int main ()
 {
 	printf ( "RUNNING INTERNAL LIBSPHINX TESTS\n\n" );
@@ -606,6 +711,7 @@ int main ()
 	BenchTokenizer ( true );
 	BenchExpr ();
 #else
+	TestQueryParser ();
 	TestStripper ();
 	TestTokenizer ( false );
 	TestTokenizer ( true );

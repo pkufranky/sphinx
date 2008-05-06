@@ -748,6 +748,8 @@ void CSphExtendedQueryNode::Submit ( CSphExtendedQueryNode * & pNew, bool bAny )
 		( IsPlain() && m_tAtom.m_dWords.GetLength()>1 && m_tAtom.m_iMaxDistance==-1 ) ||
 		( !IsPlain() && m_dChildren.GetLength()>1 ) ) )
 	{
+		assert ( IsPlain() || m_bAny==false );
+
 		// detach last word/child if we can, and build a new sublevel
 		CSphExtendedQueryNode * pChop;
 		if ( IsPlain() )
@@ -762,7 +764,7 @@ void CSphExtendedQueryNode::Submit ( CSphExtendedQueryNode * & pNew, bool bAny )
 			pChop = m_dChildren.Pop ();
 		}
 
-		pChop->Submit ( pNew, true );
+		pChop->Sublevelize ( pNew, true );
 		assert ( !pChop->IsPlain() );
 
 		Sublevelize ( pChop, false );
@@ -1368,8 +1370,8 @@ static void xqDump ( CSphExtendedQueryNode * pNode, const CSphSchema & tSch, int
 	{
 		const CSphExtendedQueryAtom & tAtom = pNode->m_tAtom;
 		xqIndent ( iIndent );
-		printf ( "MATCH(%s,%d):",
-			tAtom.m_iField>=0 ? tSch.m_dFields[tAtom.m_iField].m_sName.cstr() : "-",
+		printf ( "MATCH(%d,%d):",
+			tAtom.m_uFields,
 			tAtom.m_iMaxDistance );
 		ARRAY_FOREACH ( i, tAtom.m_dWords )
 			printf ( " %s (pos %d)", tAtom.m_dWords[i].m_sWord.cstr(), tAtom.m_dWords[i].m_iAtomPos );
