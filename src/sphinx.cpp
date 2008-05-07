@@ -1539,6 +1539,7 @@ void Swap ( OrdinalEntry_t & a, OrdinalEntry_t & b )
 struct CSphIndex_VLN : CSphIndex
 {
 	friend struct CSphDoclistRecord;
+	friend struct CSphWordDataRecord;
 
 								CSphIndex_VLN ( const char * sFilename );
 								~CSphIndex_VLN ();
@@ -18563,10 +18564,18 @@ void CSphWordDataRecord::Read( CSphMergeSource * pSource, CSphMergeData * pMerge
 			const CSphFilter & tFilter = pMergeData->m_dFilters[i];
 			if ( tFilter.m_eType==SPH_FILTER_RANGE )
 			{
-				SphAttr_t uValue = sphGetRowAttr ( tDoc.m_pRowitems, tFilter.m_iBitOffset, tFilter.m_iBitCount );
+				SphAttr_t uValue = 0;
+				if ( tDoc.m_pRowitems )
+					uValue = sphGetRowAttr ( tDoc.m_pRowitems, tFilter.m_iBitOffset, tFilter.m_iBitCount );
+				else
+				{
+					const DWORD * pDocinfo = pSource->m_pIndex->FindDocinfo ( tDoc.m_iDocID );
+					uValue = sphGetRowAttr ( pDocinfo, tFilter.m_iBitOffset, tFilter.m_iBitCount );
+				}
+
 				if ( tFilter.m_bExclude ^ ( uValue<tFilter.m_uMinValue || uValue>tFilter.m_uMaxValue ) )
 				{
-					bOK = true;
+					bOK = false;
 					break;
 				}
 			}
