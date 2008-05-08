@@ -8724,6 +8724,10 @@ void CSphIndex_VLN::MatchAll ( const CSphQuery * pQuery, CSphQueryResult * pResu
 		if ( ++i != m_dQueryWords.GetLength() )
 			continue;
 
+		// forcibly break on DOCID_MAX matches
+		if ( docID==DOCID_MAX )
+			break;
+
 		// this is my match
 		CSphMatch & tMatch = m_dQueryWords[0].m_tDoc;
 
@@ -8923,7 +8927,7 @@ void CSphIndex_VLN::MatchAny ( const CSphQuery * pQuery, CSphQueryResult * pResu
 				iMinIndex = i;
 			}
 		}
-		if ( iActive==0 )
+		if ( iActive==0 || iMinID==DOCID_MAX )
 			break;
 
 		iLastMatchID = iMinID;
@@ -9372,6 +9376,10 @@ bool CSphIndex_VLN::MatchBoolean ( const CSphQuery * pQuery, CSphQueryResult * p
 		if ( !pMatch )
 			break;
 		iMinID = 1 + pMatch->m_iDocID;
+
+		// forcibly break on DOCID_MAX matches
+		if ( pMatch->m_iDocID==DOCID_MAX )
+			break;
 
 		// early reject by group id, doc id or timestamp
 		if ( EarlyReject ( *pMatch, pQuery ) )
@@ -10292,6 +10300,10 @@ bool CSphIndex_VLN::MatchExtendedV1 ( const CSphQuery * pQuery, CSphQueryResult 
 		if ( !pAccept )
 			break;
 		iMinID = 1 + pAccept->m_iDocID;
+
+		// forcibly break on DOCID_MAX matches
+		if ( pAccept->m_iDocID==DOCID_MAX )
+			break;
 
 		CSphMatch * pReject = tReject.GetNextMatch ( pAccept->m_iDocID, 0, NULL, 0, NULL, pResult->m_sWarning );
 		if ( pReject && pReject->m_iDocID==pAccept->m_iDocID )
@@ -15942,6 +15954,8 @@ CSphSource_SQL::CSphSource_SQL ( const char * sName )
 	, m_iMultiAttr			( -1 )
 	, m_iFieldMVA			( 0 )
 	, m_iFieldMVAIterator	( 0 )
+	, m_bWarnedNull			( false )
+	, m_bWarnedMax			( false )
 {
 }
 
@@ -16163,6 +16177,9 @@ bool CSphSource_SQL::IterateHitsStart ( CSphString & sError )
 {
 	assert ( m_bSqlConnected );
 
+	m_bWarnedNull = false;
+	m_bWarnedMax = false;
+
 	// run pre-queries
 	ARRAY_FOREACH ( i, m_tParams.m_dQueryPre )
 	{
@@ -16367,7 +16384,19 @@ BYTE ** CSphSource_SQL::NextDocument ( CSphString & sError )
 		m_uMaxFetchedID = Max ( m_uMaxFetchedID, m_tDocInfo.m_iDocID );
 
 		if ( !m_tDocInfo.m_iDocID )
-			sphWarn ( "zero/NULL document_id, skipping" );
+		{
+			if ( !m_bWarnedNull )
+				sphWarn ( "zero/NULL document_id, skipping" );
+			m_bWarnedNull = true;
+		}
+
+		if ( m_tDocInfo.m_iDocID==DOCID_MAX )
+		{
+			if ( !m_bWarnedMax )
+				sphWarn ( "DOCID_MAX document_id, skipping" );
+			m_bWarnedMax = true;
+			m_tDocInfo.m_iDocID = 0;
+		}
 
 	} while ( !m_tDocInfo.m_iDocID );
 

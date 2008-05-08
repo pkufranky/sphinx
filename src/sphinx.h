@@ -1056,6 +1056,9 @@ protected:
 
 	CSphSourceParams_SQL		m_tParams;
 
+	bool				m_bWarnedNull;
+	bool				m_bWarnedMax;
+
 	static const int			MACRO_COUNT = 2;
 	static const char * const	MACRO_VALUES [ MACRO_COUNT ];
 
