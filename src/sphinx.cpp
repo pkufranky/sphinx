@@ -3102,7 +3102,7 @@ static inline SynCheck_e SynCheckPrefix ( const CSphSynonym & tCandidate, int iO
 static inline bool IsSeparator ( int iFolded, bool bFirst )
 {
 	// eternal separator
-	if ( ( iFolded & MASK_CODEPOINT )==0 )
+	if ( iFolded<0 || ( iFolded & MASK_CODEPOINT )==0 )
 		return true;
 
 	// just a codepoint
@@ -3238,7 +3238,7 @@ BYTE * CSphTokenizerTraits<IS_UTF8>::GetTokenSyn ()
 			int iTest;
 
 			int iMasked = ( iCode & MASK_CODEPOINT );
-			if ( iFolded==0 )
+			if ( iFolded<=0 )
 			{
 				sTest[0] = MAGIC_SYNONYM_WHITESPACE;
 				iTest = 1;
@@ -3271,7 +3271,7 @@ BYTE * CSphTokenizerTraits<IS_UTF8>::GetTokenSyn ()
 
 			#define LOC_REFINE_BREAK() \
 			{ \
-				if ( iExact>=0 ) { m_pCur = pExact; LOC_RETURN_SYNONYM ( iExact ); } \
+				if ( iExact>=0 ) { m_pCur = pCur = pExact; LOC_RETURN_SYNONYM ( iExact ); } \
 				break; \
 			}
 
@@ -3285,7 +3285,7 @@ BYTE * CSphTokenizerTraits<IS_UTF8>::GetTokenSyn ()
 			}
 
 			// this is to catch intermediate separators (eg. "OS/2/3")
-			bool bMaybeSeparator = ( iFolded & FLAG_CODEPOINT_SYNONYM )!=0;
+			bool bMaybeSeparator = ( iFolded & FLAG_CODEPOINT_SYNONYM )!=0 || ( iFolded<0 );
 
 			SynCheck_e eStart = SynCheckPrefix ( m_dSynonyms[iSynStart], iSynOff, sTest, iTest, bMaybeSeparator );
 			if ( eStart==SYNCHECK_EXACT )
