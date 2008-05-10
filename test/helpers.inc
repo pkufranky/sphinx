@@ -31,12 +31,12 @@ function CreateDB ( $db_drop, $db_create, $db_insert )
 }
 
 
-function RunIndexer ( &$error )
+function RunIndexer ( &$error, $params )
 {
 	global $indexer_path;
 
 	$retval = 0;
-	exec ( "$indexer_path --quiet --config config.conf --all", $error, $retval );
+	exec ( "$indexer_path --quiet --config config.conf $params", $error, $retval );
 
 	$error = join ( "\n", $error );
 	return ( $retval==0 && !empty($error) ) ? 2 : $retval;
@@ -149,6 +149,7 @@ class SphinxConfig
 	private $_queries;
 	private $_query_settings;
 	private $_query_attributes;
+	private $_indexer_runs;
 	private $_custom_test;
 	private	$_sd_address;
 	private	$_sd_port;
@@ -171,6 +172,7 @@ class SphinxConfig
 		$this->_results			= array ();
 		$this->_results_model	= array ();
 		$this->_query_attributes = array ();
+		$this->_indexer_runs	= array ();
 		$this->_num_agents		= 1;
 		$this->_subtest 		= 0;
 		$this->_subtestcount	= 0;
@@ -314,6 +316,14 @@ class SphinxConfig
 		if ( $custom )
 			$this->_custom_test = $custom->nodeValue;
 
+		// extract indexer run params
+		$indexer_run = GetFirstChild ( $xml, "indexer" );
+		if ( $indexer_run )
+		{
+			foreach ( ChildrenArray ( $indexer_run, "run" ) as $run )
+				$this->_indexer_runs [] = $run->nodeValue;
+		}
+
 		// extract queries
 		$qs = GetFirstChild ( $xml, "queries" );
 		if ( $qs )
@@ -425,6 +435,19 @@ class SphinxConfig
 		}
 
 		return true;
+	}
+
+
+	function RunIndexerEx ( &$error )
+	{
+		foreach ( $this->_indexer_runs as $param )
+		{
+			$retval = RunIndexer ( $error, $param );
+			if ( $retval != 0 )
+				return $retval;
+		}
+
+		return 0;
 	}
 
 
@@ -600,7 +623,10 @@ class SphinxConfig
 			return var_export ( $result, true )."\n";
 
 		$qinfo = $this->_queries[$nquery-1];
-		$str = "--- Query $nquery (mode=$qinfo[mode_s]) ---\n";
+		if ( array_key_exists ( "index", $qinfo ) && $qinfo ["index"] != '*' )
+			$str = "--- Query $nquery (mode=$qinfo[mode_s],index=$qinfo[index]) ---\n";
+		else
+			$str = "--- Query $nquery (mode=$qinfo[mode_s]) ---\n";
 
 		if ( @$qinfo["groupattr"] )
 			$str .= "GroupBy: attr: '".$qinfo["groupattr"]."' func: '".$qinfo["groupfunc_s"]."' sort: '".$qinfo["groupsort"]."'\n";
@@ -659,7 +685,18 @@ class SphinxConfig
 				    	}
 
 						foreach ( $docinfo ["attrs"] as $attr => $value )
-						   	$str .= " $attr=\"$value\"";
+						{
+							if ( is_array ( $value ) )
+							{
+								$str .= " $attr=\"";
+								foreach ( $value as $v )
+									$str .= $v." ";
+
+								$str .= "\"";
+							}
+							else
+						   		$str .= " $attr=\"$value\"";
+						}
 
 						$str .= "\n";
 					}
@@ -928,7 +965,7 @@ function RunTest ( $test_dir )
 
 		EraseDirContents ( $indexer_data_path );
 
-		$indexer_ret = RunIndexer ( $error );
+		$indexer_ret = RunIndexer ( $error, "--all" );
 
 		if ( $indexer_ret==1 )
 		{
@@ -937,7 +974,22 @@ function RunTest ( $test_dir )
 
 			continue;
 
-		} else if ( $indexer_ret==2 )
+		}
+		else if ( $indexer_ret==2 )
+		{
+			fwrite ( $report, "$error\n" );
+		}
+
+		$indexer_ret = $config->RunIndexerEx ( $error );
+		if ( $indexer_ret==1 )
+		{
+			if ( !HandleFailure ( $config, $report, $error, $nfailed ) )
+				$log .= "\tsubtest $subtest: error running indexer; see $report_file\n";
+
+			continue;
+
+		}
+		else if ( $indexer_ret==2 )
 		{
 			fwrite ( $report, "$error\n" );
 		}
