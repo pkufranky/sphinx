@@ -404,7 +404,7 @@ int CSphUniqounter::CountNext ( SphGroupKey_t * pOutGroup )
 	*pOutGroup = uGroup;
 
 	int iCount = 1;
-	while ( m_pData[m_iCountPos].m_uGroup==uGroup )
+	while ( m_iCountPos<m_iLength && m_pData[m_iCountPos].m_uGroup==uGroup )
 	{
 		if ( m_pData[m_iCountPos].m_uValue!=uValue )
 			iCount++;

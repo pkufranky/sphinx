@@ -26,11 +26,6 @@ source srctest
 	sql_attr_multi	= uint mva from field;
 }
 
-source srctest2 : srctest
-{
-	sql_query		= SELECT document_id+10, tag+20 AS tag, UNIX_TIMESTAMP(time) as time, mva, body FROM test_table
-}
-
 index test
 {
 	source			= srctest
@@ -41,10 +36,37 @@ index test
     charset_type 	= utf-8
 }
 
+source srctest2 : srctest
+{
+	sql_query		= SELECT document_id+10, tag+20 AS tag, UNIX_TIMESTAMP(time) as time, mva, body FROM test_table
+}
+
 index test2 : test
 {
 	source			= srctest2
 	path			= <data_path/>/test2
+}
+
+source srcmini1 : srctest
+{
+	sql_query		= SELECT document_id, tag, UNIX_TIMESTAMP(time) as time, mva, body FROM test_table WHERE document_id IN (1,7)
+}
+
+index mini1 : test
+{
+	source			= srcmini1
+	path			= <data_path/>/mini1
+}
+
+source srcmini2 : srctest
+{
+	sql_query		= SELECT document_id, tag, UNIX_TIMESTAMP(time) as time, mva, body FROM test_table WHERE document_id IN (1)
+}
+
+index mini2 : test
+{
+	source			= srcmini2
+	path			= <data_path/>/mini2
 }
 </config>
 
@@ -64,6 +86,8 @@ index test2 : test
 <query mode="extended2" index="test" groupattr="time" groupfunc="year" groupdistinct="tag"></query>
 <query mode="extended2" index="test2" groupattr="time" groupfunc="year" groupdistinct="tag"></query>
 <query mode="extended2" index="test,test2" groupattr="time" groupfunc="year" groupdistinct="tag"></query>
+
+<query mode="extended2" index="mini1,mini2" groupattr="time" groupfunc="year" groupdistinct="tag"></query>
 </queries>
 
 <db_create>
