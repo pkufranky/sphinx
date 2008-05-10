@@ -7771,17 +7771,18 @@ bool CSphIndex_VLN::Merge ( CSphIndex * pSource, CSphVector<CSphFilter> & dFilte
 	tMerge.m_eDocinfo = m_eDocinfo;
 
 	int iMinAttrSize = m_tSchema.GetRowSize();
-	assert ( iMinAttrSize );
-
-	tMerge.m_pMinRowitems = new CSphRowitem [ iMinAttrSize ];
-	for( int i = 0; i < iMinAttrSize; i++ )
+	if ( iMinAttrSize )
 	{
-		if ( bDstEmpty )
-			tMerge.m_pMinRowitems[i] = pSrcIndex->m_tMin.m_pRowitems[i];
-		else if ( bSrcEmpty )
-			tMerge.m_pMinRowitems[i] = m_tMin.m_pRowitems[i];
-		else
-			tMerge.m_pMinRowitems[i] = Min ( m_tMin.m_pRowitems[i], pSrcIndex->m_tMin.m_pRowitems[i] );
+		tMerge.m_pMinRowitems = new CSphRowitem [ iMinAttrSize ];
+		for( int i = 0; i < iMinAttrSize; i++ )
+		{
+			if ( bDstEmpty )
+				tMerge.m_pMinRowitems[i] = pSrcIndex->m_tMin.m_pRowitems[i];
+			else if ( bSrcEmpty )
+				tMerge.m_pMinRowitems[i] = m_tMin.m_pRowitems[i];
+			else
+				tMerge.m_pMinRowitems[i] = Min ( m_tMin.m_pRowitems[i], pSrcIndex->m_tMin.m_pRowitems[i] );
+		}
 	}
 
 	// fixup filters
@@ -7859,9 +7860,16 @@ bool CSphIndex_VLN::Merge ( CSphIndex * pSource, CSphVector<CSphFilter> & dFilte
 		{
 			assert ( uProgress & 0x03 );
 
-			MergeWordData ( tDstWord, tSrcWord );
-			
-			tDstWord.Write();
+			if ( tDstWord.IsEmpty () )
+				tSrcWord.Write();
+			else if ( tSrcWord.IsEmpty () )
+				tDstWord.Write ();
+			else
+			{
+				MergeWordData ( tDstWord, tSrcWord );
+				tDstWord.Write();
+			}
+
 			m_tProgress.m_iWords++;
 
 			if ( !tDstWord.Read() )
@@ -18507,17 +18515,17 @@ void CSphDoclistRecord::Write ( CSphMergeData * pData )
 	pWriter->ZipOffset ( m_iDocID - pData->m_iLastDocID );
 	pData->m_iLastDocID = m_iDocID;
 
-	assert ( pData->m_pMinRowitems );
-
 	if ( m_iRowitems )
 	{
 		if ( pData->m_eDocinfo == SPH_DOCINFO_INLINE )
 		{
+			assert ( pData->m_pMinRowitems );
 			for ( int i=0; i<m_iRowitems; i++ )
 				pWriter->ZipInt ( m_pRowitems[i] - pData->m_pMinRowitems[i] );
 		}
 		else if ( pData->m_eDocinfo == SPH_DOCINFO_EXTERN )
 		{
+			assert ( pData->m_pMinRowitems );
 			for ( int i=0; i<m_iRowitems; i++ )
 				pWriter->ZipInt ( m_pRowitems[i] );
 		}
