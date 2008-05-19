@@ -2081,11 +2081,11 @@ class CSphTokenizerTraits : public ISphTokenizer
 public:
 	CSphTokenizerTraits ();
 
-	virtual const BYTE *	GetTokenStart () const;
-	virtual const BYTE *	GetTokenEnd () const;
-	virtual const BYTE *	GetBufferPtr () const;
-	virtual const BYTE *	GetBufferEnd () const;
-	virtual void			AdvanceBufferPtr ( int iOffset );
+	virtual const char *	GetTokenStart () const		{ return (const char *) m_pTokenStart; }
+	virtual const char *	GetTokenEnd () const		{ return (const char *) m_pTokenEnd; }
+	virtual const char *	GetBufferPtr () const		{ return (const char *) m_pCur; }
+	virtual const char *	GetBufferEnd () const		{ return (const char *) m_pBufferMax; }
+	virtual void			SetBufferPtr ( const char * sNewPtr );
 
 protected:
 	BYTE * GetTokenSyn ();
@@ -3024,35 +3024,12 @@ CSphTokenizerTraits<IS_UTF8>::CSphTokenizerTraits ()
 	m_pAccum = m_sAccum;
 }
 
-template < bool IS_UTF8 >
-const BYTE * CSphTokenizerTraits<IS_UTF8>::GetTokenStart () const
-{
-	return m_pTokenStart;
-}
 
 template < bool IS_UTF8 >
-const BYTE * CSphTokenizerTraits<IS_UTF8>::GetTokenEnd () const
+void CSphTokenizerTraits<IS_UTF8>::SetBufferPtr ( const char * sNewPtr )
 {
-	return m_pTokenEnd;
-}
-
-template < bool IS_UTF8 >
-const BYTE * CSphTokenizerTraits<IS_UTF8>::GetBufferPtr () const
-{
-	return m_pCur;
-}
-
-template < bool IS_UTF8 >
-const BYTE * CSphTokenizerTraits<IS_UTF8>::GetBufferEnd () const
-{
-	return m_pBufferMax;
-}
-
-template < bool IS_UTF8 >
-void CSphTokenizerTraits<IS_UTF8>::AdvanceBufferPtr ( int iOffset )
-{
-	assert ( iOffset >= 0 );
-	m_pCur = Min ( m_pBufferMax, m_pCur + iOffset );
+	assert ( (BYTE*)sNewPtr>=m_pBuffer && (BYTE*)sNewPtr<=m_pBufferMax );
+	m_pCur = Min ( m_pBufferMax, Max ( m_pBuffer, (BYTE*)sNewPtr ) );
 	m_iAccum = 0;
 	m_pAccum = m_sAccum;
 }
@@ -14506,11 +14483,10 @@ CSphDictCRC::WordformContainer * CSphDictCRC::LoadWordformContainer ( const char
 		if ( !pFrom ) continue; // FIXME! report parsing error
 
 		CSphString sFrom ( (const char*)pFrom );
-		const BYTE * pStart = pMyTokenizer->GetBufferPtr ();
-		const BYTE * pCur = pStart;
+		const char * pCur = pMyTokenizer->GetBufferPtr ();
 		while ( isspace(*pCur) ) pCur++;
 		if ( *pCur!='>' ) continue; // FIXME! report parsing error
-		pMyTokenizer->AdvanceBufferPtr ( pCur+1-pStart ); // FIXME! replace with SetBufferPtr()
+		pMyTokenizer->SetBufferPtr ( pCur+1 );
 
 		BYTE * pTo = pMyTokenizer->GetToken ();
 		if ( !pTo ) continue; // FIXME! report parsing error

@@ -412,19 +412,19 @@ public:
 	virtual bool					IsUtf8 () const = 0;
 
 	/// start buffer point of last token
-	virtual const BYTE *			GetTokenStart () const = 0;
+	virtual const char *			GetTokenStart () const = 0;
 
 	/// end buffer point of last token
-	virtual const BYTE *			GetTokenEnd () const = 0;
+	virtual const char *			GetTokenEnd () const = 0;
 
 	/// current buffer ptr
-	virtual const BYTE *			GetBufferPtr () const = 0;
+	virtual const char *			GetBufferPtr () const = 0;
 
 	/// buffer end
-	virtual const BYTE *			GetBufferEnd () const = 0;
+	virtual const char *			GetBufferEnd () const = 0;
 
-	/// advance ptr by iOffset bytes
-	virtual void					AdvanceBufferPtr ( int iOffset ) = 0;
+	/// set new buffer ptr (must be within current bounds)
+	virtual void					SetBufferPtr ( const char * sNewPtr ) = 0;
 
 protected:
 	static const int				MAX_SYNONYM_LEN		= 1024;	///< max synonyms map-from length, bytes

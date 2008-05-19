@@ -890,9 +890,8 @@ bool CSphExtendedQueryParser::ParseFields ( DWORD & uFields, ISphTokenizer * pTo
 	if ( m_dStack.GetLength() )
 		return Error ( "field specification is only allowed at top level" );
 
-	const char * pStart = (const char *)pTokenizer->GetBufferPtr ();
-	const char * pLastPtr = (const char *)pTokenizer->GetBufferEnd ();
-	const char * pPtr = pStart;
+	const char * pPtr = pTokenizer->GetBufferPtr ();
+	const char * pLastPtr = pTokenizer->GetBufferEnd ();
 
 	if ( pPtr==pLastPtr )
 		return true; // silently ignore trailing field operator
@@ -911,7 +910,7 @@ bool CSphExtendedQueryParser::ParseFields ( DWORD & uFields, ISphTokenizer * pTo
 	{
 		// handle @*
 		uFields = 0xFFFFFFFF;
-		pTokenizer->AdvanceBufferPtr ( pPtr+1-pStart );
+		pTokenizer->SetBufferPtr ( pPtr+1 );
 		return true;
 
 	} else if ( *pPtr=='(' )
@@ -924,7 +923,7 @@ bool CSphExtendedQueryParser::ParseFields ( DWORD & uFields, ISphTokenizer * pTo
 	// handle invalid chars
 	if ( !sphIsAlpha(*pPtr) )
 	{
-		pTokenizer->AdvanceBufferPtr ( pPtr-pStart ); // ignore and re-parse (FIXME! maybe warn?)
+		pTokenizer->SetBufferPtr ( pPtr ); // ignore and re-parse (FIXME! maybe warn?)
 		return true;
 	}
 	assert ( sphIsAlpha(*pPtr) ); // i think i'm paranoid
@@ -940,7 +939,7 @@ bool CSphExtendedQueryParser::ParseFields ( DWORD & uFields, ISphTokenizer * pTo
 		if ( !AddField ( uFields, pFieldStart, pPtr-pFieldStart, pSchema ) )
 			return false;
 
-		pTokenizer->AdvanceBufferPtr ( pPtr-pStart );
+		pTokenizer->SetBufferPtr ( pPtr );
 		if ( bNegate && uFields )
 			uFields = ~uFields;
 		return true;
@@ -979,7 +978,7 @@ bool CSphExtendedQueryParser::ParseFields ( DWORD & uFields, ISphTokenizer * pTo
 			if ( !AddField ( uFields, pFieldStart, pPtr-pFieldStart, pSchema ) )
 				return false;
 
-			pTokenizer->AdvanceBufferPtr ( pPtr-pStart+1 );
+			pTokenizer->SetBufferPtr ( pPtr+1 );
 			if ( bNegate && uFields )
 				uFields = ~uFields;
 			return true;
@@ -1081,10 +1080,9 @@ bool CSphExtendedQueryParser::Parse ( CSphExtendedQuery & tParsed, const char * 
 			// the tokenizer will *not* return the number as a token!
 			if ( dState.Last()==XQS_PROXIMITY || dState.Last()==XQS_QUORUM )
 			{
-				const char * sStart = (const char*) pMyTokenizer->GetBufferPtr ();
-				const char * sEnd = (const char*) pMyTokenizer->GetBufferEnd ();
+				const char * sEnd = pMyTokenizer->GetBufferEnd ();
 
-				const char * p = sStart;
+				const char * p = pMyTokenizer->GetBufferPtr ();
 				while ( p<sEnd && isspace(*p) ) p++;
 
 				sToken = p;
@@ -1093,7 +1091,7 @@ bool CSphExtendedQueryParser::Parse ( CSphExtendedQuery & tParsed, const char * 
 				if ( p>sToken )
 				{
 					// got a number, skip it
-					pMyTokenizer->AdvanceBufferPtr ( p-sStart );
+					pMyTokenizer->SetBufferPtr ( p );
 					bSpecial = false;
 
 				} else
