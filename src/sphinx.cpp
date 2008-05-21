@@ -7269,8 +7269,6 @@ int CSphIndex_VLN::Build ( CSphDict * pDict, const CSphVector<CSphSource*> & dSo
 
 	// if there were no hits, create zero-length index files
 	int iRawBlocks = dBins.GetLength();
-	if ( iRawBlocks==0 )
-		m_eDocinfo = SPH_DOCINFO_INLINE;
 
 	//////////////////////////////
 	// create new index files set
@@ -7499,7 +7497,6 @@ bool CSphIndex_VLN::Merge ( CSphIndex * pSource, CSphVector<CSphFilter> & dFilte
 		return false;
 	}
 
-
 	int iStride = DOCINFO_IDSIZE + m_tSchema.GetRowSize();
 
 	/////////////////
@@ -7550,11 +7547,8 @@ bool CSphIndex_VLN::Merge ( CSphIndex * pSource, CSphVector<CSphFilter> & dFilte
 		if ( fdSpa.GetFD()<0 )
 			return false;
 
-		DWORD * pSrcRow = pSrcIndex->m_pDocinfo.GetWritePtr();
-		assert( pSrcRow );
-
+		DWORD * pSrcRow = pSrcIndex->m_pDocinfo.GetWritePtr(); // they *can* be null if the respective index is empty
 		DWORD * pDstRow = m_pDocinfo.GetWritePtr();
-		assert( pDstRow );
 
 		DWORD iSrcCount = 0;
 		DWORD iDstCount = 0;
@@ -12969,7 +12963,7 @@ const CSphSchema * CSphIndex_VLN::Prealloc ( bool bMlock, CSphString * sWarning 
 	// prealloc docinfos
 	/////////////////////
 
-	if ( m_eDocinfo==SPH_DOCINFO_EXTERN )
+	if ( m_eDocinfo==SPH_DOCINFO_EXTERN && m_tStats.m_iTotalDocuments )
 	{
 		/////////////
 		// attr data
@@ -13679,9 +13673,6 @@ bool CSphIndex_VLN::MultiQuery ( ISphTokenizer * pTokenizer, CSphDict * pDict, C
 
 	PROFILE_END ( query_init );
 
-	// check that docinfo is preloaded
-	assert ( m_eDocinfo!=SPH_DOCINFO_EXTERN || !m_pDocinfo.IsEmpty() );
-
 	// fixup "empty query" at low level
 	if ( pQuery->m_sQuery.IsEmpty() )
 		pQuery->m_eMode = SPH_MATCH_FULLSCAN;
@@ -13744,6 +13735,16 @@ bool CSphIndex_VLN::MultiQuery ( ISphTokenizer * pTokenizer, CSphDict * pDict, C
 
 		PROFILE_END ( query_load_words );
 	}
+
+	// empty index, empty response!
+	if ( !m_tStats.m_iTotalDocuments )
+	{
+		pResult->m_iQueryTime += int ( 1000.0f*( sphLongTimer() - tmQueryStart ) );
+		return true;
+	}
+
+	// otherwise, check that docinfo is preloaded
+	assert ( m_eDocinfo!=SPH_DOCINFO_EXTERN || !m_pDocinfo.IsEmpty() );
 
 	// reorder attr set values and lookup indexes
 	ARRAY_FOREACH ( i, pQuery->m_dFilters )
