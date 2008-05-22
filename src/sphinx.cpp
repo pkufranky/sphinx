@@ -16772,6 +16772,30 @@ bool CSphSource_PgSQL::Setup ( const CSphSourceParams_PgSQL & tParams )
 }
 
 
+bool CSphSource_PgSQL::IterateHitsStart ( CSphString & sError )
+{
+	bool bResult = CSphSource_SQL::IterateHitsStart ( sError );
+	if ( !bResult )
+		return false;
+
+	int iMaxIndex = 0;
+	for ( int i = 0; i < m_tSchema.GetAttrsCount(); i++ )
+		iMaxIndex = Max ( iMaxIndex, m_tSchema.GetAttr(i).m_iIndex );
+
+	ARRAY_FOREACH ( i, m_tSchema.m_dFields )
+		iMaxIndex = Max ( iMaxIndex, m_tSchema.m_dFields[i].m_iIndex );
+
+	m_dIsColumnBool.Resize ( iMaxIndex + 1 );
+	ARRAY_FOREACH ( i, m_dIsColumnBool )
+		m_dIsColumnBool[i] = false;
+
+	for ( int i = 0; i < m_tSchema.GetAttrsCount(); i++ )
+		m_dIsColumnBool[m_tSchema.GetAttr(i).m_iIndex] = m_tSchema.GetAttr(i).m_eAttrType == SPH_ATTR_BOOL;
+
+	return true;
+}
+
+
 bool CSphSource_PgSQL::SqlConnect ()
 {
 	char sPort[64];
@@ -16840,7 +16864,11 @@ const char * CSphSource_PgSQL::SqlColumn ( int iIndex )
 	if ( !m_pPgResult )
 		return NULL;
 
-	return PQgetvalue ( m_pPgResult, m_iPgRow, iIndex );
+	const char * szValue = PQgetvalue ( m_pPgResult, m_iPgRow, iIndex );
+	if ( m_dIsColumnBool.GetLength() && m_dIsColumnBool[iIndex] && szValue[0]=='t' && !szValue[1] )
+		return "1";
+
+	return szValue;
 }
 
 
