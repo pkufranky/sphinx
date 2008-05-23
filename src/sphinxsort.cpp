@@ -1569,9 +1569,12 @@ ISphMatchSorter * sphCreateQueue ( CSphQuery * pQuery, const CSphSchema & tSchem
 	} else if ( pQuery->m_eSort==SPH_SORT_EXPR )
 	{
 		SafeDelete ( pQuery->m_pExpr );
-		pQuery->m_pExpr = sphExprParse ( pQuery->m_sSortBy.cstr(), tSchema, sError );
+		bool bCalcGeoDist = false;
+		pQuery->m_pExpr = sphExprParse ( pQuery->m_sSortBy.cstr(), tSchema, bCalcGeoDist, sError );
 		if ( !pQuery->m_pExpr )
 			return NULL;
+
+		pQuery->m_bCalcGeodist = bCalcGeoDist;
 
 		tStateMatch.m_iAttr[0] = FIXUP_EXPR;
 		tStateMatch.m_iAttr[1] = SPH_VATTR_ID;

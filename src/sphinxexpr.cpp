@@ -290,10 +290,13 @@ class ExprParser_t
 	friend void				yyerror ( ExprParser_t * pParser, const char * sMessage );
 
 public:	
-							ExprParser_t () {}
+							ExprParser_t ();
 							~ExprParser_t () {}
 
 	ISphExpr *				Parse ( const char * sExpr, const CSphSchema & tSchema, CSphString & sError );
+
+public:
+	bool					m_bCalcGeoDist;	///< geodist hack
 
 protected:
 	int						m_iParsed;	///< filled by yyparse() at the very end
@@ -329,6 +332,11 @@ static inline int sphIsAttr ( int c )
 	return ( c>='0' && c<='9' ) || ( c>='a' && c<='z' ) || ( c>='A' && c<='Z' ) || c=='_';
 }
 
+ExprParser_t::ExprParser_t ()
+	: m_bCalcGeoDist ( false )
+{
+}
+
 /// a lexer of my own
 /// returns token id and fills lvalp on success
 /// returns -1 and fills sError on failure
@@ -361,6 +369,7 @@ int ExprParser_t::GetToken ( YYSTYPE * lvalp )
 
 		if ( sTok=="id" )		{ lvalp->eDocinfo = DI_ID; return TOK_DOCINFO; }
 		if ( sTok=="weight" )	{ lvalp->eDocinfo = DI_WEIGHT; return TOK_DOCINFO; }
+		if ( sTok=="geodist" )	{ lvalp->iAttrLocator = m_pSchema->GetRowSize (); m_bCalcGeoDist = true; return TOK_ATTR_FLOAT; }
 
 		m_sLexerError.SetSprintf ( "unknown magic name '@%s'", sTok.cstr() );
 		return -1;
@@ -759,11 +768,13 @@ ISphExpr * ExprParser_t::Parse ( const char * sExpr, const CSphSchema & tSchema,
 //////////////////////////////////////////////////////////////////////////
 
 /// parser entry point
-ISphExpr * sphExprParse ( const char * sExpr, const CSphSchema & tSchema, CSphString & sError )
+ISphExpr * sphExprParse ( const char * sExpr, const CSphSchema & tSchema, bool & bCalcGeoDist, CSphString & sError )
 {
 	// parse into opcodes
 	ExprParser_t tParser;
-	return tParser.Parse ( sExpr, tSchema, sError );
+	ISphExpr * pExpr = tParser.Parse ( sExpr, tSchema, sError );
+	bCalcGeoDist = tParser.m_bCalcGeoDist;
+	return pExpr;
 }
 
 //

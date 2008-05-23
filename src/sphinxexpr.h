@@ -32,7 +32,7 @@ struct ISphExpr
 /// parses given expression, builds evaluator
 /// returns NULL and fills sError on failure
 /// returns pointer to evaluator on success
-ISphExpr * sphExprParse ( const char * sExpr, const CSphSchema & tSchema, CSphString & sError );
+ISphExpr * sphExprParse ( const char * sExpr, const CSphSchema & tSchema, bool & bCalcGeoDist, CSphString & sError );
 
 #endif // _sphinxexpr_
 

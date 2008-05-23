@@ -501,7 +501,8 @@ void TestExpr ()
 		printf ( "testing expression evaluation, test %d/%d... ", 1+iTest, iTests );
 
 		CSphString sError;
-		CSphScopedPtr<ISphExpr> pExpr ( sphExprParse ( dTests[iTest].m_sExpr, tSchema, sError ) );
+		bool bCalcGeoDist;
+		CSphScopedPtr<ISphExpr> pExpr ( sphExprParse ( dTests[iTest].m_sExpr, tSchema, bCalcGeoDist, sError ) );
 		if ( !pExpr.Ptr() )
 		{
 			printf ( "FAILED; %s\n", sError.cstr() );
@@ -572,7 +573,8 @@ void BenchExpr ()
 		printf ( "run %d: ", iRun+1 );
 
 		CSphString sError;
-		CSphScopedPtr<ISphExpr> pExpr ( sphExprParse ( dBench[iRun].m_sExpr, tSchema, sError ) );
+		bool bCalcGeoDist;
+		CSphScopedPtr<ISphExpr> pExpr ( sphExprParse ( dBench[iRun].m_sExpr, tSchema, bCalcGeoDist, sError ) );
 		if ( !pExpr.Ptr() )
 		{
 			printf ( "FAILED; %s\n", sError.cstr() );
