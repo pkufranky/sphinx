@@ -12580,6 +12580,9 @@ void CSphIndex_VLN::MatchFullScan ( const CSphQuery * pQuery, int iSorters, ISph
 
 			SPH_SUBMIT_MATCH ( tMatch );
 		}
+
+		if ( iCutoff==0 )
+			return;
 	}
 }
 
