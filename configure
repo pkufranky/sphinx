@@ -8178,7 +8178,7 @@ if test "${with_iconv+set}" = set; then
   withval="$with_iconv"
   ac_cv_use_iconv=$withval
 else
-  ac_cv_use_iconv=no
+  ac_cv_use_iconv=yes
 
 fi;
 echo "$as_me:$LINENO: checking for libiconv" >&5

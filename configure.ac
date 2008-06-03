@@ -203,7 +203,7 @@ dnl ---
 
 AC_ARG_WITH([iconv],
 	AC_HELP_STRING([--with-iconv], [compile with iconv support (default is autodetect)]),
-	[ac_cv_use_iconv=$withval], [ac_cv_use_iconv=no]
+	[ac_cv_use_iconv=$withval], [ac_cv_use_iconv=yes]
 )
 AC_MSG_CHECKING([for libiconv])
 if test [ $have_iconv_h = yes \
