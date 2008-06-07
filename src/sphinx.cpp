@@ -1103,6 +1103,7 @@ class CSphQueryWord
 {
 public:
 	CSphString		m_sWord;		///< my copy of word
+	CSphString		m_sDictWord;	///< word after being processed by dict (eg. stemmed)
 	int				m_iQueryPos;	///< word position, from query (WARNING! reused for index into TF array in extended mode)
 	SphWordID_t		m_iWordID;		///< word ID, from dictionary
 	bool			m_bDupe;		///< whether the word occurs only once in current query
@@ -1130,8 +1131,7 @@ public:
 
 public:
 	CSphQueryWord ()
-		: m_sWord ( NULL )
-		, m_iQueryPos ( -1 )
+		: m_iQueryPos ( -1 )
 		, m_iWordID ( 0 )
 		, m_bDupe ( false )
 		, m_iDocs ( 0 )
@@ -10328,6 +10328,7 @@ struct ExtHit_t
 struct ExtQword_t
 {
 	CSphString	m_sWord;	///< word
+	CSphString	m_sDictWord;///< word as processed by dict
 	int			m_iDocs;	///< matching documents
 	int			m_iHits;	///< matching hits
 	float		m_fIDF;		///< IDF value
@@ -10642,9 +10643,9 @@ ExtNode_i * ExtNode_i::Create ( const CSphExtendedQueryNode * pNode, const CSphT
 ExtTerm_c::ExtTerm_c ( const CSphString & sTerm, DWORD uFields, const CSphTermSetup & tSetup, DWORD uQuerypos, CSphString * pWarning )
 	: m_pWarning ( pWarning )
 {
-	CSphString sBuf ( sTerm );
-	m_tQword.m_sWord = sBuf;
-	m_tQword.m_iWordID = tSetup.m_pDict->GetWordID ( (BYTE*)sBuf.cstr() );
+	m_tQword.m_sWord = sTerm;
+	m_tQword.m_sDictWord = sTerm;
+	m_tQword.m_iWordID = tSetup.m_pDict->GetWordID ( (BYTE*)m_tQword.m_sDictWord.cstr() );
 	m_tQword.SetupAttrs ( tSetup );
 	tSetup.m_pIndex->SetupQueryWord ( m_tQword, tSetup );
 
@@ -10822,6 +10823,7 @@ void ExtTerm_c::GetQwords ( ExtQwordsHash_t & hQwords )
 	m_fIDF = -1.0f;
 	ExtQword_t tInfo;
 	tInfo.m_sWord = m_tQword.m_sWord;
+	tInfo.m_sDictWord = m_tQword.m_sDictWord;
 	tInfo.m_iDocs = m_tQword.m_iDocs;
 	tInfo.m_iHits = m_tQword.m_iHits;
 	hQwords.Add (  tInfo, m_tQword.m_sWord );
@@ -12427,12 +12429,12 @@ bool CSphIndex_VLN::MatchExtended ( const CSphQuery * pQuery, CSphQueryResult * 
 			CSphQueryResult::WordStat_t & tStats = pResult->m_tWordStats [ pResult->m_iNumWords++ ];
 			if ( tStats.m_sWord.cstr() )
 			{
-				assert ( tStats.m_sWord==tWord.m_sWord );
+				assert ( tStats.m_sWord==tWord.m_sDictWord );
 				tStats.m_iDocs += tWord.m_iDocs;
 				tStats.m_iHits += tWord.m_iHits;
 			} else
 			{
-				tStats.m_sWord = tWord.m_sWord;
+				tStats.m_sWord = tWord.m_sDictWord;
 				tStats.m_iDocs = tWord.m_iDocs;
 				tStats.m_iHits = tWord.m_iHits;
 			}
@@ -14487,10 +14489,10 @@ CSphDictCRC::WordformContainer * CSphDictCRC::LoadWordformContainer ( const char
 		if ( !pFrom ) continue; // FIXME! report parsing error
 
 		CSphString sFrom ( (const char*)pFrom );
-		const char * pCur = pMyTokenizer->GetBufferPtr ();
+		const BYTE * pCur = (const BYTE *) pMyTokenizer->GetBufferPtr ();
 		while ( isspace(*pCur) ) pCur++;
 		if ( *pCur!='>' ) continue; // FIXME! report parsing error
-		pMyTokenizer->SetBufferPtr ( pCur+1 );
+		pMyTokenizer->SetBufferPtr ( (const char*) pCur+1 );
 
 		BYTE * pTo = pMyTokenizer->GetToken ();
 		if ( !pTo ) continue; // FIXME! report parsing error
