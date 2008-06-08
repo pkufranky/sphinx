@@ -2089,7 +2089,7 @@ bool SearchReplyParser_t::ParseReply ( MemInputBuffer_c & tReq, Agent_t & tAgent
 
 /////////////////////////////////////////////////////////////////////////////
 
-// returns true both schemas were equal; false otherwise
+// returns true if incoming schema (src) is equal to existing (dst); false otherwise
 bool MinimizeSchema ( CSphSchema & tDst, const CSphSchema & tSrc )
 {
 	// if dst is empty, result is also empty
@@ -2106,10 +2106,30 @@ bool MinimizeSchema ( CSphSchema & tDst, const CSphSchema & tSrc )
 	{
 		int iSrcIdx = tSrc.GetAttrIndex ( dDst[i].m_sName.cstr() );
 
+		// check for index mismatch
 		if ( iSrcIdx!=i )
 			bEqual = false;
 
-		if ( iSrcIdx==-1 )
+		// check for type/size mismatch (and fixup if needed)
+		if ( iSrcIdx>=0 )
+		{
+			const CSphColumnInfo & tSrcAttr = tSrc.GetAttr(iSrcIdx);
+			if ( tSrcAttr.m_eAttrType!=dDst[i].m_eAttrType )
+			{
+				// different types? remove the attr
+				iSrcIdx = -1;
+				bEqual = false;
+
+			} else if ( tSrcAttr.m_iBitCount!=dDst[i].m_iBitCount )
+			{
+				// different bit sizes? choose the max one
+				dDst[i].m_iBitCount = Max ( dDst[i].m_iBitCount, tSrcAttr.m_iBitCount );
+				bEqual = false;
+			}
+		}
+
+		// check for presence
+		if ( iSrcIdx<0 )
 		{
 			dDst.Remove ( i );
 			i--;
@@ -2809,8 +2829,6 @@ bool MinimizeAggrResult ( AggrResult_t & tRes, CSphQuery & tQuery )
 
 		ARRAY_FOREACH ( iSchema, tRes.m_dSchemas )
 		{
-			assert ( tRow.m_iRowitems<=tRes.m_dSchemas[iSchema].GetRowSize() );
-
 			for ( int i=0; i<tRes.m_tSchema.GetAttrsCount(); i++ ) 
 			{
 				dMapFrom[i] = tRes.m_dSchemas[iSchema].GetAttrIndex ( tRes.m_tSchema.GetAttr(i).m_sName.cstr() );
@@ -2820,10 +2838,10 @@ bool MinimizeAggrResult ( AggrResult_t & tRes, CSphQuery & tQuery )
 			for ( int i=iCur; i<iCur+tRes.m_dMatchCounts[iSchema]; i++ )
 			{
 				CSphMatch & tMatch = tRes.m_dMatches[i];
-				assert ( tMatch.m_iRowitems>=tRow.m_iRowitems );
 
 				if ( tRow.m_iRowitems )
 				{
+					// remap attrs
 					for ( int j=0; j<tRes.m_tSchema.GetAttrsCount(); j++ ) 
 					{
 						const CSphColumnInfo & tDst = tRes.m_tSchema.GetAttr(j);
@@ -2833,6 +2851,15 @@ bool MinimizeAggrResult ( AggrResult_t & tRes, CSphQuery & tQuery )
 							tMatch.GetAttr ( tSrc.m_iBitOffset, tSrc.m_iBitCount ) );
 					}
 
+					// remapped row might need *more* space because of unpacked attributes; allocate if so
+					if ( tMatch.m_iRowitems<tRow.m_iRowitems )
+					{
+						SafeDeleteArray ( tMatch.m_pRowitems );
+						tMatch.m_iRowitems = tRow.m_iRowitems;
+						tMatch.m_pRowitems = new CSphRowitem [ tRow.m_iRowitems ];
+					}
+
+					// copy remapped row
 					for ( int j=0; j<tRow.m_iRowitems; j++ )
 						tMatch.m_pRowitems[j] = tRow.m_pRowitems[j];
 				}
