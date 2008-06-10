@@ -2214,6 +2214,19 @@ ISphTokenizer * sphCreateUTF8NgramTokenizer ()
 
 /////////////////////////////////////////////////////////////////////////////
 
+enum
+{
+	MASK_CODEPOINT			= 0x00ffffffUL,	// mask off codepoint flags
+	MASK_FLAGS				= 0xff000000UL, // mask off codepoint value
+	FLAG_CODEPOINT_SPECIAL	= 0x01000000UL,	// this codepoint is special
+	FLAG_CODEPOINT_DUAL		= 0x02000000UL,	// this codepoint is special but also a valid word part
+	FLAG_CODEPOINT_NGRAM	= 0x04000000UL,	// this codepoint is n-gram indexed
+	FLAG_CODEPOINT_SYNONYM	= 0x08000000UL,	// this codepoint is used in synonym tokens only
+	FLAG_CODEPOINT_BOUNDARY	= 0x10000000UL,	// this codepoint is phrase boundary
+	FLAG_CODEPOINT_IGNORE	= 0x20000000UL	// this codepoint is ignored
+};
+
+
 CSphLowercaser::CSphLowercaser ()
 	: m_pData ( NULL )
 {
@@ -2326,23 +2339,11 @@ void CSphLowercaser::AddRemaps ( const CSphVector<CSphRemapRange> & dRemaps, DWO
 		{
 			assert ( m_pChunk [ j>>CHUNK_BITS ] );
 			int & iCodepoint = m_pChunk [ j>>CHUNK_BITS ] [ j & CHUNK_MASK ];
-			iCodepoint = ( iCodepoint ? uFlagsIfExists : uFlags ) | iRemapped;
+			bool bWordPart = ( iCodepoint & MASK_CODEPOINT ) && !( iCodepoint & FLAG_CODEPOINT_SYNONYM );
+			iCodepoint = ( bWordPart ? uFlagsIfExists : uFlags ) | ( iCodepoint & MASK_FLAGS ) | iRemapped;
 		}
 	}
 }
-
-
-enum
-{
-	MASK_CODEPOINT			= 0x00ffffffUL,	// mask off codepoint flags
-	MASK_FLAGS				= 0xff000000UL, // mask off codepoint value
-	FLAG_CODEPOINT_SPECIAL	= 0x01000000UL,	// this codepoint is special
-	FLAG_CODEPOINT_DUAL		= 0x02000000UL,	// this codepoint is special but also a valid word part
-	FLAG_CODEPOINT_NGRAM	= 0x04000000UL,	// this codepoint is n-gram indexed
-	FLAG_CODEPOINT_SYNONYM	= 0x08000000UL,	// this codepoint is used in synonym tokens only
-	FLAG_CODEPOINT_BOUNDARY	= 0x10000000UL,	// this codepoint is phrase boundary
-	FLAG_CODEPOINT_IGNORE	= 0x20000000UL	// this codepoint is ignored
-};
 
 
 void CSphLowercaser::AddSpecials ( const char * sSpecials )
@@ -3095,6 +3096,22 @@ static inline bool IsSeparator ( int iFolded, bool bFirst )
 }
 
 
+// handles escaped specials that are not in the character set
+// returns true if the codepoint should be processed as a simple codepoint,
+//		false if it should be processed as a whitespace
+// for example: aaa\!bbb => aaa bbb
+static inline bool Special2Simple ( int & iCodepoint )
+{
+	if ( ( iCodepoint & FLAG_CODEPOINT_DUAL ) || !( iCodepoint & FLAG_CODEPOINT_SPECIAL ) )
+	{
+		iCodepoint &= ~( FLAG_CODEPOINT_SPECIAL | FLAG_CODEPOINT_DUAL );
+		return true;
+	}
+
+	return false;
+}
+
+
 template < bool IS_UTF8 >
 BYTE * CSphTokenizerTraits<IS_UTF8>::GetTokenSyn ()
 {
@@ -3163,10 +3180,11 @@ BYTE * CSphTokenizerTraits<IS_UTF8>::GetTokenSyn ()
 					continue;
 				}
 				else
-				{
-					if ( iLastCodepoint == '\\' )
-						iFolded &= ~( FLAG_CODEPOINT_SPECIAL | FLAG_CODEPOINT_DUAL );
-				}
+					if ( iLastCodepoint == '\\' && !Special2Simple( iFolded ) )
+					{
+						iLastCodepoint = 0;
+						continue;
+					}
 
 				iLastCodepoint = iCode;
 			}
@@ -3394,8 +3412,8 @@ BYTE * CSphTokenizerTraits<IS_UTF8>::GetTokenSyn ()
 
 				if ( bEscaped )
 				{
-					if ( iCode != '\\' && iLast == '\\' )
-						iFolded &= ~FLAG_CODEPOINT_SPECIAL;
+					if ( iCode != '\\' && iLast == '\\' && !Special2Simple ( iFolded ) )
+						break;
 
 					iLast = iCode;
 				}
@@ -3623,8 +3641,8 @@ BYTE * CSphTokenizer_SBCS::GetToken ()
 				continue;
 			}
 
-			if ( iLastCodepoint == '\\' )
-				iCode &= ~FLAG_CODEPOINT_SPECIAL;
+			if ( iLastCodepoint == '\\' && !Special2Simple ( iCode ) )
+				iCode = 0;
 
 			iLastCodepoint = iCodepoint;
 		}
@@ -3815,8 +3833,8 @@ BYTE * CSphTokenizer_UTF8::GetToken ()
 				continue;
 			}
 
-			if ( iLastCodepoint == '\\' )
-				iCode &= ~FLAG_CODEPOINT_SPECIAL;
+			if ( iLastCodepoint == '\\' && !Special2Simple ( iCode ) )
+				iCode = 0;
 
 			iLastCodepoint = iCodePoint;
 		}
