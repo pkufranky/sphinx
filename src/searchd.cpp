@@ -3876,7 +3876,10 @@ void HandleCommandUpdate ( int iSock, int iVer, InputBuffer_c & tReq, int iPipeF
 	CSphAttrUpdate_t tUpd;
 	tUpd.m_dAttrs.Resize ( tReq.GetDword() ); // FIXME! check this
 	ARRAY_FOREACH ( i, tUpd.m_dAttrs )
+	{
 		tUpd.m_dAttrs[i].m_sName = tReq.GetString ();
+		tUpd.m_dAttrs[i].m_sName.ToLower ();
+	}
 
 	int iStride = DOCINFO_IDSIZE + tUpd.m_dAttrs.GetLength();
 
