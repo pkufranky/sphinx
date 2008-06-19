@@ -5506,11 +5506,15 @@ int WINAPI ServiceMain ( int argc, char **argv )
 			tIdx.Reset (); // so that the dtor wouln't delete everything
 		}
 
-		if (  ( hIndex.GetInt ( "min_prefix_len", 0 ) > 0 || hIndex.GetInt ( "min_infix_len", 0 ) > 0 )
-			&& strlen ( hIndex.GetStr ( "morphology", "" ) ) > 0  && hIndex.GetInt ( "enable_star", 0 ) == 0 )
+		if ( ( hIndex.GetInt ( "min_prefix_len", 0 ) > 0 || hIndex.GetInt ( "min_infix_len", 0 ) > 0 ) 
+			&& hIndex.GetInt ( "enable_star" ) == 0 )
 		{
-			sphWarning ( "index '%s': infixes and morphology are enabled, enable_star=0; NOT SERVING", sIndexName );
-			continue;
+			const char * szMorph = hIndex.GetStr ( "morphology", "" );
+			if ( szMorph && *szMorph && strcmp ( szMorph, "none" ) )
+			{
+				sphWarning ( "index '%s': infixes and morphology are enabled, enable_star=0; NOT SERVING", sIndexName );
+				continue;
+			}
 		}
 
 		iValidIndexes++;
