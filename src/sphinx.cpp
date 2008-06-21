@@ -16151,7 +16151,7 @@ bool CSphSource_SQL::SetupRanges ( const char * sRangeQuery, const char * sQuery
 		return false;
 	}
 
-	if ( SqlColumn(0)==NULL && SqlColumn(1)==NULL )
+	if ( ( SqlColumn(0)==NULL || !SqlColumn(0)[0] ) && ( SqlColumn(1)==NULL || !SqlColumn(1)[0] ) )
 	{
 		// the source seems to be empty; workaround
 		m_uMinID = 1;
