@@ -3063,7 +3063,9 @@ void SearchHandler_c::RunSubset ( int iStart, int iEnd )
 			( qCheck.m_iMinID!=qFirst.m_iMinID ) || // min-id filter
 			( qCheck.m_iMaxID!=qFirst.m_iMaxID ) || // max-id filter
 			( qCheck.m_dFilters.GetLength()!=qFirst.m_dFilters.GetLength() ) || // attr filters count
-			( qCheck.m_iCutoff!=qFirst.m_iCutoff ) ) // cutoff
+			( qCheck.m_iCutoff!=qFirst.m_iCutoff ) || // cutoff
+			( qCheck.m_eSort==SPH_SORT_EXPR && qFirst.m_eSort==SPH_SORT_EXPR && qCheck.m_sSortBy!=qFirst.m_sSortBy ) || // sort expressions
+			( qCheck.m_bGeoAnchor && qFirst.m_bGeoAnchor && ( qCheck.m_fGeoLatitude!=qFirst.m_fGeoLatitude || qCheck.m_fGeoLongitude!=qFirst.m_fGeoLongitude ) ) )  // some geodist cases
 		{
 			bMultiQueue = false;
 			break;
@@ -3230,11 +3232,38 @@ void SearchHandler_c::RunSubset ( int iStart, int iEnd )
 					for ( int iQuery=iStart; iQuery<=iEnd; iQuery++ )
 					{
 						CSphString sError;
-						ISphMatchSorter * pSorter = sphCreateQueue ( &m_dQueries[iQuery], *tServed.m_pSchema, sError );
+						CSphQuery & tQuery = m_dQueries[iQuery];
+						ISphMatchSorter * pSorter = sphCreateQueue ( &tQuery, *tServed.m_pSchema, sError );
 						if ( !pSorter )
 						{
 							m_dFailuresSet[iQuery].SubmitEx ( dLocal[iLocal].cstr(), "%s", sError.cstr() );
 							continue;
+						}
+
+						if ( iQuery )
+						{
+							CSphQuery & tStartQuery = m_dQueries[0];
+
+							if ( tQuery.m_pExpr )
+							{
+								assert ( !tStartQuery.m_pExpr || tStartQuery.m_sSortBy == tQuery.m_sSortBy );
+								Swap ( tStartQuery.m_pExpr, tQuery.m_pExpr );
+							}
+
+							if ( tQuery.m_bCalcGeodist )
+							{
+								assert ( ( tStartQuery.m_sGeoLatAttr.IsEmpty () ||  tStartQuery.m_sGeoLatAttr == tQuery.m_sGeoLatAttr )
+									&& ( tStartQuery.m_sGeoLongAttr.IsEmpty () || tStartQuery.m_sGeoLongAttr == tQuery.m_sGeoLongAttr )
+									&& ( tStartQuery.m_fGeoLatitude == 0.0f || tStartQuery.m_fGeoLatitude == tQuery.m_fGeoLatitude )
+									&& ( tStartQuery.m_fGeoLongitude == 0.0f || tStartQuery.m_fGeoLongitude == tQuery.m_fGeoLongitude ) );
+
+								tStartQuery.m_bCalcGeodist = true;
+								tStartQuery.m_bGeoAnchor = tQuery.m_bGeoAnchor;
+								tStartQuery.m_sGeoLatAttr = tQuery.m_sGeoLatAttr;
+								tStartQuery.m_sGeoLongAttr = tQuery.m_sGeoLongAttr;
+								tStartQuery.m_fGeoLatitude = tQuery.m_fGeoLatitude;
+								tStartQuery.m_fGeoLongitude = tQuery.m_fGeoLongitude;
+							}
 						}
 
 						dSorterIndexes[iQuery] = dSorters.GetLength();
