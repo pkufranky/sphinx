@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<test>
+
+<name>fullscan vs cutoff</name>
+
+<config>
+indexer
+{
+	mem_limit		= 16M
+}
+
+searchd
+{
+	<searchd_settings/>
+}
+
+source src
+{
+	type			= mysql
+	<sql_settings/>
+
+	sql_query		= SELECT * FROM test_table
+	sql_attr_uint	= tag
+}
+
+index idx
+{
+	source			= src
+	path			= <data_path/>/main
+    charset_type 	= utf-8
+}
+
+</config>
+
+<queries>
+<query filter="tag" filtervalue="150"></query>
+</queries>
+
+<db_create>
+CREATE TABLE `test_table`
+(
+	`document_id` int(11) NOT NULL default '0',
+	`tag` int(11) NOT NULL default '0',
+	`body` varchar(255) NOT NULL default ''
+)
+</db_create>
+
+<db_create>
+CREATE PROCEDURE Fill ()
+BEGIN
+  DECLARE t INT DEFAULT 200;
+  INSERT INTO test_table VALUES ( 1,200,'one' );
+
+  WHILE t > 1 DO
+	INSERT INTO test_table VALUES ( t,t,'one' );
+    SET t = t - 1;
+  END WHILE;
+END;
+</db_create>
+
+<db_drop>DROP PROCEDURE IF EXISTS Fill</db_drop>
+<db_drop>DROP TABLE IF EXISTS test_table</db_drop>
+<db_insert>CALL Fill</db_insert>
+
+</test>
