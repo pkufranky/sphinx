@@ -196,6 +196,7 @@ const char *				sphinx_error	( sphinx_client * client );
 const char *				sphinx_warning	( sphinx_client * client );
 
 sphinx_bool					sphinx_set_server				( sphinx_client * client, const char * host, int port );
+sphinx_bool					sphinx_set_connect_timeout		( sphinx_client * client, float seconds );
 sphinx_bool					sphinx_set_limits				( sphinx_client * client, int offset, int limit, int max_matches, int cutoff );
 sphinx_bool					sphinx_set_max_query_time		( sphinx_client * client, int max_query_time );
 sphinx_bool					sphinx_set_match_mode			( sphinx_client * client, int mode );

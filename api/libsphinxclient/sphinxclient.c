@@ -114,6 +114,7 @@ struct st_sphinx_client
 
 	const char *			host;
 	int						port;
+	float					timeout;
 	int						offset;
 	int						limit;
 	int						mode;
@@ -190,6 +191,7 @@ sphinx_client * sphinx_create ( sphinx_bool copy_args )
 
 	client->host					= strchain ( client, "localhost" );
 	client->port					= 3312;
+	client->timeout					= 0.0f;
 	client->offset					= 0;
 	client->limit					= 20;
 	client->mode					= SPH_MATCH_ALL;
@@ -396,6 +398,16 @@ sphinx_bool sphinx_set_server ( sphinx_client * client, const char * host, int p
 	unchain ( client, client->host );
 	client->host = strchain ( client, host );
 	client->port = port;
+	return SPH_TRUE;
+}
+
+
+sphinx_bool sphinx_set_connect_timeout ( sphinx_client * client, float seconds )
+{
+	if ( !client )
+		return SPH_FALSE;
+
+	client->timeout = seconds;
 	return SPH_TRUE;
 }
 
@@ -1273,7 +1285,10 @@ static int net_connect ( sphinx_client * client )
 		return -1;
 	}
 
-	to_wait = CONNECT_TIMEOUT_MSEC;
+	to_wait = (int)( 1000*client->timeout );
+	if ( to_wait<=0 )
+		to_wait = CONNECT_TIMEOUT_MSEC;
+
 	{
 		timeout.tv_sec = to_wait / 1000; // full seconds
 		timeout.tv_usec = ( to_wait % 1000 ) * 1000; // remainder is msec, so *1000 for usec
