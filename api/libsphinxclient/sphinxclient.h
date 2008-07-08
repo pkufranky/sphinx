@@ -92,7 +92,6 @@ enum
 	SPH_ATTR_ORDINAL		= 3,
 	SPH_ATTR_BOOL			= 4,
 	SPH_ATTR_FLOAT			= 5,
-	SPH_ATTR_BIGINT			= 6,
 	SPH_ATTR_MULTI			= 0x40000000UL
 };
 
@@ -103,8 +102,7 @@ enum
 	SPH_GROUPBY_MONTH		= 2,
 	SPH_GROUPBY_YEAR		= 3,
 	SPH_GROUPBY_ATTR		= 4,
-	SPH_GROUPBY_ATTRPAIR	= 5,
-	SPH_GROUPBY_EXTENDED	= 6,
+	SPH_GROUPBY_ATTRPAIR	= 5
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -204,10 +202,7 @@ sphinx_bool					sphinx_set_ranking_mode			( sphinx_client * client, int ranker )
 sphinx_bool					sphinx_set_sort_mode			( sphinx_client * client, int mode, const char * sortby );
 sphinx_bool					sphinx_set_field_weights		( sphinx_client * client, int num_weights, const char ** field_names, const int * field_weights );
 sphinx_bool					sphinx_set_index_weights		( sphinx_client * client, int num_weights, const char ** index_names, const int * index_weights );
-/*
-sphinx_bool					sphinx_set_field_weights_va		( sphinx_client * client, const char * first_name, int first_weight, ... );
-sphinx_bool					sphinx_set_index_weights_va		( sphinx_client * client, const char * first_name, int first_weight, ... );
-*/
+
 sphinx_bool					sphinx_set_id_range				( sphinx_client * client, uint64_t minid, uint64_t maxid );
 sphinx_bool					sphinx_add_filter				( sphinx_client * client, const char * attr, int num_values, const uint64_t * values, sphinx_bool exclude );
 sphinx_bool					sphinx_add_filter_range			( sphinx_client * client, const char * attr, uint64_t umin, uint64_t umax, sphinx_bool exclude );
@@ -216,12 +211,9 @@ sphinx_bool					sphinx_set_geoanchor			( sphinx_client * client, const char * at
 sphinx_bool					sphinx_set_groupby				( sphinx_client * client, const char * attr, int groupby_func, const char * group_sort );
 sphinx_bool					sphinx_set_groupby_distinct		( sphinx_client * client, const char * attr );
 sphinx_bool					sphinx_set_retries				( sphinx_client * client, int count, int delay );
-sphinx_bool					sphinx_set_override_int			( sphinx_client * client, const char * attr, int attr_type, int num_values, const uint64_t * docids, const uint64_t * values );
-sphinx_bool					sphinx_set_override_float		( sphinx_client * client, const char * attr, int num_values, const uint64_t * docids, const float * values );
 
 void						sphinx_reset_filters			( sphinx_client * client );
 void						sphinx_reset_groupby			( sphinx_client * client );
-void						sphinx_reset_overrides			( sphinx_client * client );
 
 sphinx_result *				sphinx_query					( sphinx_client * client, const char * query, const char * index_list, const char * comment );
 int							sphinx_add_query				( sphinx_client * client, const char * query, const char * index_list, const char * comment );
