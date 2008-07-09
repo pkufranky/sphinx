@@ -11944,7 +11944,13 @@ const ExtDoc_t * ExtQuorum_c::GetDocsChunk ( SphDocID_t * pMaxID )
 	{
 		// find min document ID, count occurences
 		ExtDoc_t tCand;
+
 		tCand.m_uDocid = DOCID_MAX; // current candidate id
+		tCand.m_uHitlistOffset = 0; // suppress gcc warnings
+		tCand.m_pDocinfo = NULL;
+		tCand.m_uFields = 0;
+		tCand.m_fTFIDF = 0.0f;
+
 		int iCandMatches = 0; // amount of children that match current candidate
 		ARRAY_FOREACH ( i, m_pCurDoc )
 		{
