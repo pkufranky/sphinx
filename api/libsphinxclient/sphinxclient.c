@@ -894,8 +894,8 @@ static void send_str ( char ** pp, const char * s )
 
 static void send_qword ( char ** pp, uint64_t value )
 {
-	send_int ( pp, (int)( value & U64C(0xffffffff) ) );
 	send_int ( pp, (int)( value >> 32 ) );
+	send_int ( pp, (int)( value & U64C(0xffffffff) ) );
 }
 
 
@@ -1047,13 +1047,24 @@ static int sock_errno ()
 }
 
 
-static int sock_set_nb ( int sock )
+static int sock_set_nonblocking ( int sock )
 {
 #if _WIN32
 	u_long uMode = 1;
 	return ioctlsocket ( sock, FIONBIO, &uMode );
 #else
 	return fcntl ( sock, F_SETFL, O_NONBLOCK );
+#endif
+}
+
+
+static int sock_set_blocking ( int sock )
+{
+#if _WIN32
+	u_long uMode = 0;
+	return ioctlsocket ( sock, FIONBIO, &uMode );
+#else
+	return fcntl ( sock, F_SETFL, 0 );
 #endif
 }
 
@@ -1107,9 +1118,9 @@ static int net_connect ( sphinx_client * client )
 		return -1;
 	}
 
-	if ( sock_set_nb ( sock )<0 )
+	if ( sock_set_nonblocking ( sock )<0 )
 	{
-		set_error ( client, "sock_set_nb() failed: %s", sock_error() );
+		set_error ( client, "sock_set_nonblocking() failed: %s", sock_error() );
 		return -1;
 	}
 
@@ -1141,7 +1152,10 @@ static int net_connect ( sphinx_client * client )
 		res = select ( 1+sock, NULL, &fds_write, NULL, &timeout );
 
 		if ( res>=0 && FD_ISSET ( sock, &fds_write ) )
+		{
+			sock_set_blocking ( sock );
 			return sock;
+		}
 
 		/*!COMMIT handle EINTR here*/
 
@@ -1297,6 +1311,7 @@ static void net_get_response ( int fd, sphinx_client * client )
 	// read the response
 	if ( !net_read ( fd, response, len, client ) )
 	{
+		sock_close ( fd );
 		free ( response );
 		return;
 	}
@@ -1325,6 +1340,9 @@ static void net_get_response ( int fd, sphinx_client * client )
 			free ( response );
 			break;
 	}
+
+	// close the socket
+	sock_close ( fd );
 }
 
 
@@ -1521,6 +1539,7 @@ sphinx_result * sphinx_run_queries ( sphinx_client * client )
 	return client->results;
 }
 
+//////////////////////////////////////////////////////////////////////////
 
 uint64_t sphinx_get_id ( sphinx_result * result, int match )
 {
@@ -1558,6 +1577,234 @@ unsigned int * sphinx_get_mva ( sphinx_result * result, int match, int attr )
 	union un_attr_value * pval;
 	pval = result->values_pool;
 	return pval [ (2+result->num_attrs)*match+2+attr ].mva_value;
+}
+
+//////////////////////////////////////////////////////////////////////////
+
+static sphinx_bool net_simple_query ( sphinx_client * client, char * buf, int req_len )
+{
+	int fd;
+
+	fd = net_connect ( client );
+	if ( fd<0 )
+	{
+		free ( buf );
+		return SPH_FALSE;
+	}
+
+	if ( !net_write ( fd, buf, 12+req_len, client ) )
+	{
+		free ( buf );
+		return SPH_FALSE;
+	}
+	free ( buf );
+
+	net_get_response ( fd, client );
+	if ( !client->response_buf )
+		return SPH_FALSE;
+
+	return SPH_TRUE;
+}
+
+
+void sphinx_init_excerpt_options ( sphinx_excerpt_options * opts )
+{
+	if ( !opts )
+		return;
+
+	opts->before_match		= NULL;
+	opts->after_match		= NULL;
+	opts->chunk_separator	= NULL;
+
+	opts->limit				= 0;
+	opts->around			= 0;
+
+	opts->exact_phrase		= SPH_FALSE;
+	opts->single_passage	= SPH_FALSE;
+	opts->use_boundaries	= SPH_FALSE;
+	opts->weight_order		= SPH_FALSE;
+}
+
+
+char ** sphinx_build_excerpts ( sphinx_client * client, int num_docs, const char ** docs, const char * index, const char * words, sphinx_excerpt_options * opts )
+{
+	sphinx_excerpt_options opt;
+	int i, req_len, flags;
+	char *buf, *req, *p, *pmax, **result;
+
+	if ( !client || !docs || !index || !words || num_docs<=0 )
+	{
+		if ( !docs )			set_error ( client, "invalid arguments (docs must not be empty)" );
+		else if ( !index )		set_error ( client, "invalid arguments (index must not be empty)" );
+		else if ( !words )		set_error ( client, "invalid arguments (words must not be empty)" );
+		else if ( num_docs<=0 )	set_error ( client, "invalid arguments (num_docs must be positive)" );
+		return NULL;
+	}
+
+	// fixup options
+	sphinx_init_excerpt_options ( &opt );
+	if ( opts )
+	{
+		opt.before_match		= opts->before_match ? opts->before_match : "<b>";
+		opt.after_match			= opts->after_match ? opts->after_match : "</b>";
+		opt.chunk_separator		= opts->chunk_separator ? opts->chunk_separator : " ... ";
+
+		opt.limit				= opts->limit>0 ? opts->limit : 256;
+		opt.around				= opts->around>0 ? opts->around : 5;
+
+		opt.exact_phrase		= opts->exact_phrase;
+		opt.single_passage		= opts->single_passage;
+		opt.use_boundaries		= opts->use_boundaries;
+		opt.weight_order		= opts->weight_order;
+	}
+
+	// alloc buffer
+	req_len = (int)( 40 + strlen(index) + strlen(words) + strlen(opt.before_match) + strlen(opt.after_match) + strlen(opt.chunk_separator) );
+	for ( i=0; i<num_docs; i++ )
+		req_len += (int)( 4 + safestrlen(docs[i]) );
+
+	buf = malloc ( 12+req_len ); // request body length plus 12 header bytes
+	if ( !buf )
+	{
+		set_error ( client, "malloc() failed (bytes=%d)", req_len );
+		return NULL;
+	}
+
+	// build request
+	req = buf;
+
+	send_int ( &req, 1 ); // major protocol version
+	send_word ( &req, SEARCHD_COMMAND_EXCERPT );
+	send_word ( &req, VER_COMMAND_EXCERPT );
+	send_int ( &req, req_len );
+
+	flags = 1; // remove spaces
+	if ( opt.exact_phrase )		flags |= 2;
+	if ( opt.single_passage )	flags |= 4;
+	if ( opt.use_boundaries )	flags |= 8;
+	if ( opt.weight_order )		flags |= 16;
+
+	send_int ( &req, 0 );
+	send_int ( &req, flags );
+	send_str ( &req, index );
+	send_str ( &req, words );
+
+	send_str ( &req, opt.before_match );
+	send_str ( &req, opt.after_match );
+	send_str ( &req, opt.chunk_separator );
+	send_int ( &req, opt.limit );
+	send_int ( &req, opt.around );
+
+	send_int ( &req, num_docs );
+	for ( i=0; i<num_docs; i++ )
+		send_str ( &req, docs[i] );
+
+	if ( (int)(req-buf)!=12+req_len )
+	{
+		set_error ( client, "internal error: failed to build request in sphinx_build_excerpts()" );
+		free ( buf );
+		return NULL;
+	}
+
+	// send query, get response
+	if ( !net_simple_query ( client, buf, req_len ) )
+		return NULL;
+
+	// parse response
+	p = client->response_start;
+	pmax = client->response_start + client->response_len; // max position for checks, to protect against broken responses
+
+	result = malloc ( (1+num_docs)*sizeof(char*) );
+	if ( !result )
+	{
+		set_error ( client, "malloc() failed (bytes=%d)", (1+num_docs)*sizeof(char*) );
+		return NULL;
+	}
+
+	for ( i=0; i<num_docs; i++ )
+		result[i] = NULL;
+
+	for ( i=0; i<num_docs && p<pmax; i++ )
+		result[i] = strdup ( unpack_str ( &p ) );
+
+	if ( p>pmax )
+	{
+		for ( i=0; i<num_docs; i++ )
+			if ( result[i] )
+				free ( result[i] );
+
+		set_error ( client, "unpack error" );
+		return NULL;
+	}
+
+	// done
+	return result;
+}
+
+//////////////////////////////////////////////////////////////////////////
+
+int sphinx_update_attributes ( sphinx_client * client, const char * index, int num_attrs, const char ** attrs, int num_docs, const uint64_t * docids, const uint64_t * values )
+{
+	int i, j, req_len;
+	char *buf, *req, *p;
+
+	// check args
+	if ( !client || num_attrs<=0 || !attrs || num_docs<=0 || !docids || !values )
+	{
+		if ( num_attrs<=0 )		set_error ( client, "invalid arguments (num_attrs must be positive)" );
+		else if ( !index )		set_error ( client, "invalid arguments (index must not be empty)" );
+		else if ( !attrs )		set_error ( client, "invalid arguments (attrs must not empty)" );
+		else if ( num_docs<=0 )	set_error ( client, "invalid arguments (num_docs must be positive)" );
+		else if ( !docids )		set_error ( client, "invalid arguments (docids must not be empty)" );
+		else if ( !values )		set_error ( client, "invalid arguments (values must not be empty)" );
+	}
+
+	// alloc buffer
+	req_len = (int)( 12 + safestrlen(index) + (8+4*num_attrs)*num_docs );
+	for ( i=0; i<num_attrs; i++ )
+		req_len += (int)( 4 + safestrlen(attrs[i]) );
+
+	buf = malloc ( 12+req_len ); // request body length plus 12 header bytes
+	if ( !buf )
+	{
+		set_error ( client, "malloc() failed (bytes=%d)", req_len );
+		return -1;
+	}
+
+	// build request
+	req = buf;
+
+	send_int ( &req, 1 ); // major protocol version
+	send_word ( &req, SEARCHD_COMMAND_UPDATE );
+	send_word ( &req, VER_COMMAND_UPDATE );
+	send_int ( &req, req_len );
+
+	send_str ( &req, index );
+	send_int ( &req, num_attrs );
+	for ( i=0; i<num_attrs; i++ )
+		send_str ( &req, attrs[i] );
+
+	send_int ( &req, num_docs );
+	for ( i=0; i<num_docs; i++ )
+	{
+		send_qword ( &req, docids[i] );
+		for ( j=0; j<num_attrs; j++ )
+			send_int ( &req, (unsigned int)( *values++ ) );
+	}
+
+	// send query, get response
+	if ( !net_simple_query ( client, buf, req_len ) )
+		return -1;
+
+	// parse response
+	if ( client->response_len<4 )
+	{
+		set_error ( client, "incomplete reply" );
+		return -1;
+	}
+
+	p = client->response_start;
+	return unpack_int ( &p );
 }
 
 //

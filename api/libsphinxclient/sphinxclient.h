@@ -185,6 +185,22 @@ typedef struct st_sphinx_result
 	sphinx_wordinfo *		words;
 } sphinx_result;
 
+
+typedef struct st_sphinx_excerpt_options
+{
+	const char *			before_match;
+	const char *			after_match;
+	const char *			chunk_separator;
+
+	int						limit;
+	int						around;
+
+	sphinx_bool				exact_phrase;
+	sphinx_bool				single_passage;
+	sphinx_bool				use_boundaries;
+	sphinx_bool				weight_order;
+} sphinx_excerpt_options;
+
 //////////////////////////////////////////////////////////////////////////
 
 sphinx_client *				sphinx_create	( sphinx_bool copy_args );
@@ -225,14 +241,12 @@ uint64_t					sphinx_get_int					( sphinx_result * result, int match, int attr );
 float						sphinx_get_float				( sphinx_result * result, int match, int attr );
 unsigned int *				sphinx_get_mva					( sphinx_result * result, int match, int attr );
 
-/////////////////////////////////////////////////////////////////////////////
+void						sphinx_init_excerpt_options		( sphinx_excerpt_options * opts );
+char **						sphinx_build_excerpts			( sphinx_client * client, int num_docs, const char ** docs, const char * index, const char * words, sphinx_excerpt_options * opts );
 
-/*
-function BuildExcerpts ( $docs, $index, $words, $opts=array() )
-function BuildKeywords ( $query, $index, $hits )
-function EscapeString ( $string )
-function UpdateAttributes ( $index, $attrs, $values )
-*/
+int							sphinx_update_attributes		( sphinx_client * client, const char * index, int num_attrs, const char ** attrs, int num_docs, const uint64_t * docids, const uint64_t * values );
+
+/////////////////////////////////////////////////////////////////////////////
 
 #ifdef	__cplusplus
 }

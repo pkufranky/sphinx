@@ -33,16 +33,8 @@ void die ( const char * template, ... )
 }
 
 
-int main ()
+void net_init ()
 {
-	sphinx_client * client;
-	sphinx_result * res;
-	const char *query, *index;
-	int i, j, k;
-	unsigned int * mva;
-	const char * field_names[2];
-	int field_weights[2];
-
 #if _WIN32
 	// init WSA on Windows
 	WSADATA wsa_data;
@@ -50,18 +42,22 @@ int main ()
 
 	wsa_startup_err = WSAStartup ( WINSOCK_VERSION, &wsa_data );
 	if ( wsa_startup_err )
-	{
-		printf ( "failed to initialize WinSock2: error %d", wsa_startup_err );
-		return 1;
-	}
+		die ( "failed to initialize WinSock2: error %d", wsa_startup_err );
 #endif
+}
+
+
+void test_query ( sphinx_client * client )
+{
+	sphinx_result * res;
+	const char *query, *index;
+	int i, j, k;
+	unsigned int * mva;
+	const char * field_names[2];
+	int field_weights[2];
 
 	query = "test";
-	index = "*";
-
-	client = sphinx_create ( SPH_TRUE );
-	if ( !client )
-		die ( "failed to create client" );
+	index = "test1";
 
 	field_names[0] = "title";
 	field_names[1] = "content";
@@ -80,7 +76,7 @@ int main ()
 	printf ( "Query stats:\n" );
 	for ( i=0; i<res->num_words; i++ )
 		printf ( "\t'%s' found %d times in %d documents\n",
-			res->words[i].word, res->words[i].hits, res->words[i].docs );
+		res->words[i].word, res->words[i].hits, res->words[i].docs );
 
 	printf ( "\nMatches:\n" );
 	for ( i=0; i<res->num_matches; i++ )
@@ -93,21 +89,90 @@ int main ()
 			printf ( ", %s=", res->attr_names[j] );
 			switch ( res->attr_types[j] )
 			{
-				case SPH_ATTR_MULTI | SPH_ATTR_INTEGER:
-					mva = sphinx_get_mva ( res, i, j );
-					printf ( "(" );
-					for ( k=0; k<(int)mva[0]; k++ )
-						printf ( k ? ",%u" : "%u", mva[1+k] );
-					printf ( ")" );
-					break;
+			case SPH_ATTR_MULTI | SPH_ATTR_INTEGER:
+				mva = sphinx_get_mva ( res, i, j );
+				printf ( "(" );
+				for ( k=0; k<(int)mva[0]; k++ )
+					printf ( k ? ",%u" : "%u", mva[1+k] );
+				printf ( ")" );
+				break;
 
-				case SPH_ATTR_FLOAT:	printf ( "%f", sphinx_get_float ( res, i, j ) ); break;
-				default:				printf ( "%u", (unsigned int)sphinx_get_int ( res, i, j ) ); break;
+			case SPH_ATTR_FLOAT:	printf ( "%f", sphinx_get_float ( res, i, j ) ); break;
+			default:				printf ( "%u", (unsigned int)sphinx_get_int ( res, i, j ) ); break;
 			}
 		}
 
 		printf ( "\n" );
 	}
+	printf ( "\n" );
+}
+
+
+void test_excerpt ( sphinx_client * client )
+{
+	const char * docs[] =
+	{
+		"this is my test text to be highlighted, and for the sake of the testing we need to pump its length somewhat",
+		"another test text to be highlighted, below limit",
+		"test number three, without phrase match",
+		"final test, not only without phrase match, but also above limit and with swapped phrase text test as well"
+	};
+	const int ndocs = sizeof(docs)/sizeof(docs[0]);
+	const char * words = "test text";
+	const char * index = "test1";
+	sphinx_excerpt_options opts;
+	char ** res;
+	int i, j;
+	
+	sphinx_init_excerpt_options ( &opts );
+	opts.limit = 60;
+	opts.around = 3;
+
+	for ( j=0; j<2; j++ )
+	{
+		opts.exact_phrase = j;
+		printf ( "exact_phrase=%d\n", j );
+
+		res = sphinx_build_excerpts ( client, ndocs, docs, index, words, &opts );
+		if ( !res )
+			die ( "query failed: %s", sphinx_error(client) );
+
+		for ( i=0; i<ndocs; i++ )
+			printf ( "n=%d, res=%s\n", 1+i, res[i] );
+		printf ( "\n" );
+	}
+}
+
+
+void test_update ( sphinx_client * client )
+{
+	const char * attr = "group_id";
+	const uint64_t id = 2;
+	const uint64_t val = 123;
+	int res;
+
+	res = sphinx_update_attributes ( client, "test1", 1, &attr, 1, &id, &val );
+	if ( res<0 )
+		printf ( "update failed: %s\n\n", sphinx_error(client) );
+	else
+		printf ( "update success, %d rows updated\n\n", res );
+}
+
+
+int main ()
+{
+	sphinx_client * client;
+
+	net_init ();
+
+	client = sphinx_create ( SPH_TRUE );
+	if ( !client )
+		die ( "failed to create client" );
+
+	test_query ( client );
+	test_excerpt ( client );
+	test_update ( client );
+	test_query ( client );
 
 	sphinx_destroy ( client );
 	return 0;
