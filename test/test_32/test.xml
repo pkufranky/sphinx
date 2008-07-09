@@ -45,21 +45,16 @@ CREATE TABLE `test_table`
 )
 </db_create>
 
-<db_create>
-CREATE PROCEDURE Fill ()
-BEGIN
-  DECLARE t INT DEFAULT 200;
-  INSERT INTO test_table VALUES ( 1,200,'one' );
+<db_insert>INSERT INTO test_table VALUES ( 1,1,'one' ), ( 2,2,'one' ), ( 3,3,'one' ), ( 4,4,'one' )</db_insert>
+<db_insert>INSERT INTO test_table SELECT document_id+4, tag+4, body FROM test_table</db_insert>
+<db_insert>INSERT INTO test_table SELECT document_id+8, tag+8, body FROM test_table</db_insert>
+<db_insert>INSERT INTO test_table SELECT document_id+16, tag+16, body FROM test_table</db_insert>
+<db_insert>INSERT INTO test_table SELECT document_id+32, tag+32, body FROM test_table</db_insert>
+<db_insert>INSERT INTO test_table SELECT document_id+64, tag+64, body FROM test_table</db_insert>
+<db_insert>INSERT INTO test_table SELECT document_id+128, tag+128, body FROM test_table</db_insert>
+<db_insert>DELETE FROM test_table WHERE document_id>200</db_insert>
+<db_insert>UPDATE test_table SET tag=200 WHERE document_id=1</db_insert>
 
-  WHILE t > 1 DO
-	INSERT INTO test_table VALUES ( t,t,'one' );
-    SET t = t - 1;
-  END WHILE;
-END;
-</db_create>
-
-<db_drop>DROP PROCEDURE IF EXISTS Fill</db_drop>
-<db_drop>DROP TABLE IF EXISTS test_table</db_drop>
-<db_insert>CALL Fill</db_insert>
+<db_drop>DROP TABLE test_table</db_drop>
 
 </test>
