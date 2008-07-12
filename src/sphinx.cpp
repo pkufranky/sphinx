@@ -773,10 +773,16 @@ public:
 		return m_pData==NULL;
 	}
 
-	/// get length
+	/// get length in bytes
 	size_t GetLength () const
 	{
 		return m_iLength;
+	}
+
+	/// get length in entries
+	DWORD GetNumEntries () const
+	{
+		return m_iEntries;
 	}
 
 protected:
@@ -13287,6 +13293,7 @@ bool CSphIndex_VLN::Preread ()
 			for ( const DWORD * pCur=pDocinfoStart; pCur<pDocinfoMax; pCur+=uStride )
 			{
 				const DWORD * pRow = DOCINFO2ATTRS(pCur);
+				SphDocID_t uDocID = DOCINFO2ID(pCur);
 
 				// ints
 				ARRAY_FOREACH ( i, dIntAttrs )
@@ -13314,7 +13321,27 @@ bool CSphIndex_VLN::Preread ()
 					if ( !uOff )
 						continue;
 
+					// sanity checks
+					if ( uOff>=m_pMva.GetLength() )
+					{
+						m_sLastError.SetSprintf ( "broken index: mva offset out of bounds, id=" DOCID_FMT, uDocID );
+						return false;
+					}
+
 					const DWORD * pMva = &m_pMva [ uOff ];
+
+					if ( DOCINFO2ID(pMva-DOCINFO_IDSIZE)!=uDocID )
+					{
+						m_sLastError.SetSprintf ( "broken index: mva docid verification failed, id=" DOCID_FMT, uDocID );
+						return false;
+					}
+					if ( uOff+pMva[0]>=m_pMva.GetNumEntries() )
+					{
+						m_sLastError.SetSprintf ( "broken index: mva list out of bounds, id=" DOCID_FMT, uDocID );
+						return false;
+					}
+
+					// walk and calc
 					for ( DWORD uCount = *pMva++; uCount>0; uCount--, pMva++ )
 					{
 						dMvaMin[i] = Min ( dMvaMin[i], *pMva );
