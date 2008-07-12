@@ -5092,6 +5092,15 @@ int CSphIndex_VLN::UpdateAttributes ( const CSphAttrUpdate_t & tUpd )
 			m_sLastError.SetSprintf ( "attribute '%s' not found", tUpd.m_dAttrs[i].m_sName.cstr() );
 			return -1;
 		}
+
+		// forbid updates on non-int columns
+		const CSphColumnInfo & tCol = m_tSchema.GetAttr(iIndex);
+		if (!( tCol.m_eAttrType==SPH_ATTR_BOOL || tCol.m_eAttrType==SPH_ATTR_INTEGER || tCol.m_eAttrType==SPH_ATTR_TIMESTAMP ))
+		{
+			m_sLastError.SetSprintf ( "attribute '%s' can not be updated (must be boolean, integer, or timestamp)", tUpd.m_dAttrs[i].m_sName.cstr() );
+			return -1;
+		}
+
 		dAttrIndex.Add ( iIndex );
 	}
 	assert ( dAttrIndex.GetLength()==tUpd.m_dAttrs.GetLength() );
