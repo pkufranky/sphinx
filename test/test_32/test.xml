@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <test>
 
-<name>fullscan vs cutoff</name>
+<name>fullscan early-reject blocks vs cutoff/updates</name>
 
 <config>
 indexer
@@ -32,9 +32,21 @@ index idx
 
 </config>
 
-<queries>
-<query filter="tag" filtervalue="150"></query>
-</queries>
+<custom_test>
+$result = array ();
+
+$client->SetFilter ( "tag", array(150) );
+$results[] = $client->Query ( "" );
+
+$results[] = $client->UpdateAttributes ( "idx", array("tag"), array(137=>array(1137)) );
+
+$client->ResetFilters ();
+$client->SetFilter ( "tag", array(1137) );
+$results[] = $client->Query ( "" );
+
+unset ( $results[0]["time"] );
+unset ( $results[2]["time"] );
+</custom_test>
 
 <db_create>
 CREATE TABLE `test_table`

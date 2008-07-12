@@ -5097,8 +5097,10 @@ int CSphIndex_VLN::UpdateAttributes ( const CSphAttrUpdate_t & tUpd )
 	assert ( dAttrIndex.GetLength()==tUpd.m_dAttrs.GetLength() );
 
 	// do update
-	int iUpdated = 0;
 	int iStride = DOCINFO_IDSIZE + dAttrIndex.GetLength();
+	int iRowStride = DOCINFO_IDSIZE + m_tSchema.GetRowSize();
+
+	int iUpdated = 0;
 	const DWORD * pUpdate = tUpd.m_pUpdates;
 
 	for ( int iUpd=0; iUpd<tUpd.m_iUpdates; iUpd++, pUpdate+=iStride )
@@ -5107,16 +5109,27 @@ int CSphIndex_VLN::UpdateAttributes ( const CSphAttrUpdate_t & tUpd )
 		if ( !pEntry )
 			continue;
 
+		int iBlock = ( pEntry-m_pDocinfo.GetWritePtr() ) / ( iRowStride*DOCINFO_INDEX_FREQ );
+		DWORD * pBlock = const_cast < DWORD * > ( &m_pDocinfoIndex[2*iBlock*iRowStride] );
+		assert ( iBlock>=0 && iBlock<(int)m_uDocinfoIndex );
+
 		assert ( DOCINFO2ID(pEntry)==DOCINFO2ID(pUpdate) );
 		pEntry = DOCINFO2ATTRS(pEntry);
 
 		ARRAY_FOREACH ( i, dAttrIndex )
 		{
+			DWORD uValue = pUpdate [ DOCINFO_IDSIZE+i ];
+
 			const CSphColumnInfo & tCol = m_tSchema.GetAttr ( dAttrIndex[i] );
-			if ( tCol.m_iRowitem>=0 )
-				pEntry [ tCol.m_iRowitem ] = pUpdate [ DOCINFO_IDSIZE+i ];
-			else
-				sphSetRowAttr ( pEntry, tCol.m_iBitOffset, tCol.m_iBitCount, pUpdate [ DOCINFO_IDSIZE+i ] );
+			sphSetRowAttr ( pEntry, tCol.m_iBitOffset, tCol.m_iBitCount, uValue );
+
+			SphAttr_t uMin = sphGetRowAttr ( DOCINFO2ATTRS(pBlock), tCol.m_iBitOffset, tCol.m_iBitCount );
+			SphAttr_t uMax = sphGetRowAttr ( DOCINFO2ATTRS(pBlock+iRowStride), tCol.m_iBitOffset, tCol.m_iBitCount );
+			if ( uValue<uMin || uValue>uMax )
+			{
+				sphSetRowAttr ( DOCINFO2ATTRS(pBlock), tCol.m_iBitOffset, tCol.m_iBitCount, Min ( uMin, uValue ) );
+				sphSetRowAttr ( DOCINFO2ATTRS(pBlock+iRowStride), tCol.m_iBitOffset, tCol.m_iBitCount, Max ( uMax, uValue ) );
+			}
 		}
 
 		iUpdated++;
