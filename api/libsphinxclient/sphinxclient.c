@@ -1656,6 +1656,14 @@ char ** sphinx_build_excerpts ( sphinx_client * client, int num_docs, const char
 		opt.single_passage		= opts->single_passage;
 		opt.use_boundaries		= opts->use_boundaries;
 		opt.weight_order		= opts->weight_order;
+	} else
+	{
+		opt.before_match		= "<b>";
+		opt.after_match			= "</b>";
+		opt.chunk_separator		= " ... ";
+
+		opt.limit				= 256;
+		opt.around				= 5;
 	}
 
 	// alloc buffer
