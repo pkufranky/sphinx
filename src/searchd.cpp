@@ -2546,8 +2546,9 @@ void LogQuery ( const CSphQuery & tQuery, const CSphQueryResult & tRes )
 		snprintf ( sTagBuf, sizeof(sTagBuf), " [%s]", tQuery.m_sComment.cstr() );
 
 
+	int iQueryTime = Max ( tRes.m_iQueryTime, 0 );
 	snprintf ( sBuf, sizeof(sBuf), "[%s] %d.%03d sec [%s/%d/%s %d (%d,%d)%s] [%s]%s%s %s\n",
-		sTimeBuf, tRes.m_iQueryTime/1000, tRes.m_iQueryTime%1000,
+		sTimeBuf, iQueryTime/1000, iQueryTime%1000,
 		sModes [ tQuery.m_eMode ], tQuery.m_dFilters.GetLength(), sSort [ tQuery.m_eSort ],
 		tRes.m_iTotalMatches, tQuery.m_iOffset, tQuery.m_iLimit, sGroupBuf,
 		tQuery.m_sIndexes.cstr(), sPerfBuf, sTagBuf, tQuery.m_sQuery.cstr() );
@@ -2766,7 +2767,7 @@ void SendResult ( int iVer, NetOutputBuffer_c & tOut, const CSphQueryResult * pR
 	}
 	tOut.SendInt ( pRes->m_dMatches.GetLength() );
 	tOut.SendInt ( pRes->m_iTotalMatches );
-	tOut.SendInt ( pRes->m_iQueryTime );
+	tOut.SendInt ( Max ( pRes->m_iQueryTime, 0 ) );
 	tOut.SendInt ( pRes->m_iNumWords );
 
 	for ( int i=0; i<pRes->m_iNumWords; i++ )
