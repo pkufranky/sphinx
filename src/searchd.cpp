@@ -4527,16 +4527,21 @@ protected:
 			return false;
 		}
 
-		int iRes = ::read ( m_iFD, pBuf, iCount );
-		if ( iRes!=iCount )
+		for ( ;; )
 		{
-			m_bError = true;
-			sphWarning ( "pipe read failed (exp=%d, res=%d, error=%s)",
-				iCount, iRes, iRes>0 ? "(none)" : strerror(errno) );
-			return false;
-		}
+			int iRes = ::read ( m_iFD, pBuf, iCount );
+			if ( iRes<0 && errno==EINTR )
+				continue;
 
-		return true;
+			if ( iRes!=iCount )
+			{
+				m_bError = true;
+				sphWarning ( "pipe read failed (exp=%d, res=%d, error=%s)",
+					iCount, iRes, iRes>0 ? "(none)" : strerror(errno) );
+				return false;
+			}
+			return true;
+		}
 	}
 
 protected:
