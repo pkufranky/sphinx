@@ -13330,7 +13330,7 @@ bool CSphIndex_VLN::Preread ()
 
 					const DWORD * pMva = &m_pMva [ uOff ];
 
-					if ( DOCINFO2ID(pMva-DOCINFO_IDSIZE)!=uDocID )
+					if ( i==0 && DOCINFO2ID(pMva-DOCINFO_IDSIZE)!=uDocID )
 					{
 						m_sLastError.SetSprintf ( "broken index: mva docid verification failed, id=" DOCID_FMT, uDocID );
 						return false;
