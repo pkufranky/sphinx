@@ -58,9 +58,9 @@ $client->AddQuery ('one');
 $client->SetSortMode ( SPH_SORT_EXPR, '@id' );
 $client->AddQuery ('one');
 $results = $client->RunQueries ();
-unset ( $results[0]['time'] );
-unset ( $results[1]['time'] );
-unset ( $results[2]['time'] );
+@unset ( $results[0]['time'] );
+@unset ( $results[1]['time'] );
+@unset ( $results[2]['time'] );
 </Custom_test>
 
 </Test>

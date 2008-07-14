@@ -33,7 +33,7 @@ index idx
 </config>
 
 <custom_test>
-$result = array ();
+$results = array ();
 
 $client->SetFilter ( "tag", array(150) );
 $results[] = $client->Query ( "" );
@@ -44,8 +44,8 @@ $client->ResetFilters ();
 $client->SetFilter ( "tag", array(1137) );
 $results[] = $client->Query ( "" );
 
-unset ( $results[0]["time"] );
-unset ( $results[2]["time"] );
+@unset ( $results[0]["time"] );
+@unset ( $results[2]["time"] );
 </custom_test>
 
 <db_create>

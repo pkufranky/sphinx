@@ -547,6 +547,7 @@ class SphinxConfig
     		$cl = new SphinxClient ();
 			$cl->SetServer ( $sd_address, $sd_port );
 
+			$results = false;
 			$run_func = create_function( '$client, &$results', $this->_custom_test );
 			$run_func ( $cl, $results ); 
 
@@ -793,11 +794,7 @@ class SphinxConfig
 
 			file_put_contents ( "current", $result_f_cur );
 			file_put_contents ( "reference", $result_f_ref );
-
-			if ( $windows )
-				system ( "diff -u3 reference current > diffed.txt" );
-			else
-				system ( "diff reference current > diffed.txt" );
+			system ( "diff -u3 reference current > diffed.txt" );
 
 			$diffed = file_get_contents ( "diffed.txt" );
 			unlink ( "current" );
