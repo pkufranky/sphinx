@@ -89,6 +89,8 @@ Table of Contents
    5.7. Additional functionality
       5.7.1. BuildExcerpts
       5.7.2. UpdateAttributes
+      5.7.3. BuildKeywords
+      5.7.4. EscapeString
 
 6. MySQL storage engine (SphinxSE)
    6.1. SphinxSE overview
@@ -2182,6 +2184,43 @@ The first sample statement will update document 1 in index "test1", setting
 in index "products". For document 1001, the new price will be set to 123
 and the new amount in stock to 5; for document 1002, the new price will be
 37 and the new amount will be 11; etc.
+
+5.7.3. BuildKeywords
+--------------------
+
+Prototype: function BuildKeywords ( $query, $index, $hits )
+
+Extracts keywords from query using tokenizer settings for given index,
+optionally with per-keyword occurrence statistics. Returns an array of
+hashes with per-keyword information.
+
+$query is a query to extract keywords from. $index is a name of the index
+to get tokenizing settings and keyword occurrence statistics from. $hits is
+a boolean flag that indicates whether keyword occurrence statistics are
+required.
+
+Usage example:
+
+   | $keywords = $cl->BuildKeywords ( "this.is.my query", "test1", false );
+
+5.7.4. EscapeString
+-------------------
+
+Prototype: function EscapeString ( $string )
+
+Escapes characters that are treated as special operators by the query
+language parser. Returns an escaped string.
+
+$string is a string to escape.
+
+This function might seem redundant because it's trivial to implement in any
+calling application. However, as the set of special characters might change
+over time, it makes sense to have an API call that is guaranteed to escape
+all such characters at all times.
+
+Usage example:
+
+   | $escaped = $cl->EscapeString ( "escaping-sample@query/string" );
 
 6. MySQL storage engine (SphinxSE)
 ==================================
@@ -4390,6 +4429,59 @@ General
    * improved index locking, now fcntl()-based instead of buggy
      file-existence-based
    * fixed unaligned RAM accesses, now works on SPARC and ARM
+
+Changes and fixes since 0.9.8-RC2
+---------------------------------
+
+   * added pure C API (libsphinxclient)
+   * added Ruby API
+   * added SetConnectTimeout() PHP API call
+   * added allowed type check to UpdateAttributes() handler (issue #174)
+   * added defensive MVA checks on index preload (protection against broken
+     indexes, issue #168)
+   * added sphinx-min.conf sample file
+   * added --without-iconv switch to configure
+   * removed redundant -lz dependency in searchd
+   * removed erroneous "xmlpipe2 deprecated" warning
+   * fixed EINTR handling in piped read (issue #166)
+   * fixup query time before logging and sending to client (issue #153)
+   * fixed attribute updates vs full-scan early-reject index (issue #149)
+   * fixed gcc warnings (issue #160)
+   * fixed mysql connection attempt vs pgsql source type (issue #165)
+   * fixed 32-bit wraparound when preloading over 2 GB files
+   * fixed "out of memory" message vs over 2 GB allocs (issue #116)
+   * fixed unaligned RAM access detection on ARM (where unaligned reads do
+     not crash but produce wrong results)
+   * fixed missing full scan results in some cases
+   * fixed several bugs in --merge, --merge-dst-range
+   * fixed @geodist vs MultiQuery and filters, @expr vs MultiQuery
+   * fixed GetTokenEnd() vs 1-grams (was causing crash in excerpts)
+   * fixed sql_query_range to handle empty strings in addition to NULL
+     strings (Postgres specific)
+   * fixed morphology=none vs infixes
+   * fixed case sensitive attributes names in UpdateAttributes()
+   * fixed ext2 ranking vs. stopwords (now using atompos from query parser)
+   * fixed EscapeString() call
+   * fixed escaped specials (now handled as whitespace if not in charset)
+   * fixed schema minimizer (now handles type/size mismatches)
+   * fixed word stats in extended2; stemmed form is now returned
+   * fixed spelldump case folding vs dictionary-defined character sets
+   * fixed Postgres BOOLEAN handling
+   * fixed enforced "inline" docinfo on empty indexes (normally ok, but
+     index merge was really confused)
+   * fixed rare count(distinct) out-of-bounds issue (it occasionaly caused
+     too high @distinct values)
+   * fixed hangups on documents with id=DOCID_MAX in some cases
+   * fixed rare crash in tokenizer (prefixed synonym vs. input stream eof)
+   * fixed query parser vs "aaa (bbb ccc)|ddd" queries
+   * fixed BuildExcerpts() request in Java API
+   * fixed Postgres specific memory leak
+   * fixed handling of overshort keywords (less than min_word_len)
+   * fixed HTML stripper (now emits space after indexed attributes)
+   * fixed 32-field case in query parser
+   * fixed rare count(distinct) vs. querying multiple local indexes vs.
+     reusable sorter issue
+   * fixed sorting of negative floats in SPH_SORT_EXTENDED mode
 
 A.2. Version 0.9.7, 02 apr 2007
 -------------------------------
