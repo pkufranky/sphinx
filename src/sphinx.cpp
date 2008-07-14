@@ -137,7 +137,7 @@ void sphAssert ( const char * sExpr, const char * sFile, int iLine )
 
 // forward decl
 void sphWarn ( const char * sTemplate, ... );
-int sphReadThrottled ( int iFD, void * pBuf, size_t iCount );
+size_t sphReadThrottled ( int iFD, void * pBuf, size_t iCount );
 
 /////////////////////////////////////////////////////////////////////////////
 // GLOBALS
@@ -481,7 +481,7 @@ const CSphIOStats & sphStopIOStats ()
 }
 
 
-int sphRead ( int iFD, void * pBuf, size_t iCount )
+size_t sphRead ( int iFD, void * pBuf, size_t iCount )
 {
 	float fTimer = 0.0f;
 	if ( g_bIOStats )
@@ -606,7 +606,7 @@ public:
 
 	bool Read ( void * pBuf, size_t uCount, CSphString & sError )
 	{
-		size_t uRead = (size_t) sphRead ( GetFD(), pBuf, uCount );
+		size_t uRead = sphRead ( GetFD(), pBuf, uCount );
 
 		if ( uRead!=uCount )
 		{
@@ -1836,21 +1836,21 @@ bool sphWriteThrottled ( int iFD, const void * pBuf, size_t iCount, const char *
 }
 
 
-int sphReadThrottled ( int iFD, void * pBuf, size_t iCount )
+size_t sphReadThrottled ( int iFD, void * pBuf, size_t iCount )
 {
 	if ( g_iMaxIOSize && int (iCount) > g_iMaxIOSize )
 	{
-		int nChunks		= iCount / g_iMaxIOSize;
-		int nBytesLeft	= iCount % g_iMaxIOSize;
+		size_t nChunks		= iCount / g_iMaxIOSize;
+		size_t nBytesLeft	= iCount % g_iMaxIOSize;
 
-		int nBytesRead = 0;
-		int iRead = 0;
+		size_t nBytesRead = 0;
+		size_t iRead = 0;
 
-		for ( int i = 0; i < nChunks; ++i )
+		for ( size_t i=0; i<nChunks; i++ )
 		{
 			iRead = sphReadThrottled ( iFD, (char *)pBuf + i*g_iMaxIOSize, g_iMaxIOSize );
 			nBytesRead += iRead;
-			if ( iRead != g_iMaxIOSize )
+			if ( iRead != (size_t)g_iMaxIOSize )
 				return nBytesRead;
 		}
 
@@ -4851,7 +4851,7 @@ int CSphBin::ReadByte ()
 		{
 			assert ( m_dBuffer );
 
-			if ( sphReadThrottled ( m_iFile, m_dBuffer, n )!=n )
+			if ( sphReadThrottled ( m_iFile, m_dBuffer, n )!=(size_t)n )
 				return -2;
 			m_iLeft = n;
 
@@ -4897,7 +4897,7 @@ ESphBinRead CSphBin::ReadBytes ( void * pDest, int iBytes )
 		assert ( m_dBuffer );
 		memmove ( m_dBuffer, m_pCurrent, m_iLeft );
 
-		if ( sphReadThrottled ( m_iFile, m_dBuffer + m_iLeft, n )!=n )
+		if ( sphReadThrottled ( m_iFile, m_dBuffer + m_iLeft, n )!=(size_t)n )
 			return BIN_READ_ERROR;
 
 		m_iLeft += n;
