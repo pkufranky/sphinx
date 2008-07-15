@@ -1,13 +1,13 @@
 //
-// $Id: sphinxclient.c 29 2008-07-08 21:32:57Z shodan $
+// $Id: sphinxclient.c 50 2008-07-15 13:20:30Z shodan $
 //
 
 //
 // Copyright (c) 2008, Andrew Aksyonoff. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify
-// it under the terms of the GNU General Public License. You should have
-// received a copy of the GPL license along with this program; if you
+// it under the terms of the GNU Library General Public License. You should
+// have received a copy of the LGPL license along with this program; if you
 // did not, you can find it at http://www.gnu.org/
 //
 
@@ -20,6 +20,10 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifndef _WIN32
+#include "sphinxclient_config.h"
+#endif
 
 #include "sphinxclient.h"
 
@@ -74,9 +78,9 @@ struct st_filter
 	const char *			attr;
 	int						filter_type;
 	int						num_values;
-	const uint64_t *		values;
-	uint64_t				umin;
-	uint64_t				umax;
+	const sphinx_uint64_t *	values;
+	sphinx_uint64_t			umin;
+	sphinx_uint64_t			umax;
 	float					fmin;
 	float					fmax;
 	int						exclude;
@@ -85,7 +89,7 @@ struct st_filter
 
 union un_attr_value
 {
-	uint64_t				int_value;
+	sphinx_uint64_t			int_value;
 	float					float_value;
 	unsigned int *			mva_value;
 };
@@ -111,8 +115,8 @@ struct st_sphinx_client
 	const int *				weights;
 	int						sort;
 	const char *			sortby;
-	uint64_t				minid;
-	uint64_t				maxid;
+	sphinx_uint64_t			minid;
+	sphinx_uint64_t			maxid;
 	const char *			group_by;
 	int						group_func;
 	const char *			group_sort;
@@ -547,7 +551,7 @@ sphinx_bool sphinx_set_index_weights ( sphinx_client * client, int num_weights, 
 }
 
 
-sphinx_bool sphinx_set_id_range ( sphinx_client * client, uint64_t minid, uint64_t maxid )
+sphinx_bool sphinx_set_id_range ( sphinx_client * client, sphinx_uint64_t minid, sphinx_uint64_t maxid )
 {
 	if ( !client || minid>maxid )
 	{
@@ -579,7 +583,7 @@ static struct st_filter * sphinx_add_filter_entry ( sphinx_client * client )
 }
 
 
-sphinx_bool sphinx_add_filter ( sphinx_client * client, const char * attr, int num_values, const uint64_t * values, sphinx_bool exclude )
+sphinx_bool sphinx_add_filter ( sphinx_client * client, const char * attr, int num_values, const sphinx_uint64_t * values, sphinx_bool exclude )
 {
 	struct st_filter * filter;
 
@@ -599,13 +603,13 @@ sphinx_bool sphinx_add_filter ( sphinx_client * client, const char * attr, int n
 	filter->attr = strchain ( client, attr );
 	filter->filter_type = SPH_FILTER_VALUES;
 	filter->num_values = num_values;
-	filter->values = chain ( client, values, num_values*sizeof(uint64_t) );
+	filter->values = chain ( client, values, num_values*sizeof(sphinx_uint64_t) );
 	filter->exclude = exclude;
 	return SPH_TRUE;
 }
 
 
-sphinx_bool sphinx_add_filter_range ( sphinx_client * client, const char * attr, uint64_t umin, uint64_t umax, sphinx_bool exclude )
+sphinx_bool sphinx_add_filter_range ( sphinx_client * client, const char * attr, sphinx_uint64_t umin, sphinx_uint64_t umax, sphinx_bool exclude )
 {
 	struct st_filter * filter;
 
@@ -714,7 +718,7 @@ sphinx_bool sphinx_set_groupby_distinct ( sphinx_client * client, const char * a
 
 	unchain ( client, client->group_distinct );
 	client->group_distinct = strchain ( client, attr );
-	return SPH_FALSE;
+	return SPH_TRUE;
 }
 
 
@@ -810,7 +814,7 @@ static int calc_req_len ( sphinx_client * client, const char * query, const char
 	int i;
 	size_t res;
 
-	res = 96 + 2*(int)sizeof(uint64_t) + 4*client->num_weights
+	res = 96 + 2*(int)sizeof(sphinx_uint64_t) + 4*client->num_weights
 		+ safestrlen ( client->sortby )
 		+ safestrlen ( query )
 		+ safestrlen ( index_list )
@@ -892,10 +896,10 @@ static void send_str ( char ** pp, const char * s )
 }
 
 
-static void send_qword ( char ** pp, uint64_t value )
+static void send_qword ( char ** pp, sphinx_uint64_t value )
 {
 	send_int ( pp, (int)( value >> 32 ) );
-	send_int ( pp, (int)( value & U64C(0xffffffff) ) );
+	send_int ( pp, (int)( value & ((sphinx_uint64_t)0xffffffffL) ) );
 }
 
 
@@ -1249,9 +1253,9 @@ static char * unpack_str ( char ** cur )
 }
 
 
-static uint64_t unpack_qword ( char ** cur )
+static sphinx_uint64_t unpack_qword ( char ** cur )
 {
-	uint64_t hi, lo;
+	sphinx_uint64_t hi, lo;
 	hi = unpack_int ( cur );
 	lo = unpack_int ( cur );
 	return ( hi<<32 ) + lo;
@@ -1541,7 +1545,13 @@ sphinx_result * sphinx_run_queries ( sphinx_client * client )
 
 //////////////////////////////////////////////////////////////////////////
 
-uint64_t sphinx_get_id ( sphinx_result * result, int match )
+int sphinx_get_num_results ( sphinx_client * client )
+{
+	return client ? client->num_results : -1;
+}
+
+
+sphinx_uint64_t sphinx_get_id ( sphinx_result * result, int match )
 {
 	return sphinx_get_int ( result, match, -2 );
 }
@@ -1553,7 +1563,7 @@ int sphinx_get_weight ( sphinx_result * result, int match )
 }
 
 
-uint64_t sphinx_get_int ( sphinx_result * result, int match, int attr )
+sphinx_uint64_t sphinx_get_int ( sphinx_result * result, int match, int attr )
 {
 	// FIXME! add safety and type checks
 	union un_attr_value * pval;
@@ -1656,8 +1666,7 @@ char ** sphinx_build_excerpts ( sphinx_client * client, int num_docs, const char
 		opt.single_passage		= opts->single_passage;
 		opt.use_boundaries		= opts->use_boundaries;
 		opt.weight_order		= opts->weight_order;
-	} else
-	{
+	} else {
 		opt.before_match		= "<b>";
 		opt.after_match			= "</b>";
 		opt.chunk_separator		= " ... ";
@@ -1729,7 +1738,7 @@ char ** sphinx_build_excerpts ( sphinx_client * client, int num_docs, const char
 		return NULL;
 	}
 
-	for ( i=0; i<num_docs; i++ )
+	for ( i=0; i<=num_docs; i++ )
 		result[i] = NULL;
 
 	for ( i=0; i<num_docs && p<pmax; i++ )
@@ -1751,7 +1760,7 @@ char ** sphinx_build_excerpts ( sphinx_client * client, int num_docs, const char
 
 //////////////////////////////////////////////////////////////////////////
 
-int sphinx_update_attributes ( sphinx_client * client, const char * index, int num_attrs, const char ** attrs, int num_docs, const uint64_t * docids, const uint64_t * values )
+int sphinx_update_attributes ( sphinx_client * client, const char * index, int num_attrs, const char ** attrs, int num_docs, const sphinx_uint64_t * docids, const sphinx_uint64_t * values )
 {
 	int i, j, req_len;
 	char *buf, *req, *p;
@@ -1815,6 +1824,80 @@ int sphinx_update_attributes ( sphinx_client * client, const char * index, int n
 	return unpack_int ( &p );
 }
 
+//////////////////////////////////////////////////////////////////////////
+
+sphinx_keyword_info * sphinx_build_keywords ( sphinx_client * client, const char * query, const char * index, sphinx_bool hits, int * out_num_keywords )
+{
+	int i, req_len, nwords, len;
+	char *buf, *req, *p, *pmax;
+	sphinx_keyword_info *res;
+
+	// check args
+	if ( !client || !query || !index )
+	{
+		if ( !query )					set_error ( client, "invalid arguments (query must not be empty)" );
+		else if ( !index )				set_error ( client, "invalid arguments (index must not be empty)" );
+		else if ( !out_num_keywords )	set_error ( client, "invalid arguments (out_num_keywords must not be null)" );
+		return NULL;
+	}
+
+	// alloc buffer
+	req_len = (int)( safestrlen(query) + safestrlen(index) + 12 );
+
+	buf = malloc ( 12+req_len ); // request body length plus 12 header bytes
+	if ( !buf )
+	{
+		set_error ( client, "malloc() failed (bytes=%d)", req_len );
+		return NULL;
+	}
+
+	// build request
+	req = buf;
+
+	send_int ( &req, 1 ); // major protocol version
+	send_word ( &req, SEARCHD_COMMAND_KEYWORDS );
+	send_word ( &req, VER_COMMAND_KEYWORDS );
+	send_int ( &req, req_len );
+
+	send_str ( &req, query );
+	send_str ( &req, index );
+	send_int ( &req, hits );
+
+	// send query, get response
+	if ( !net_simple_query ( client, buf, req_len ) )
+		return NULL;
+
+	// parse response
+	p = client->response_start;
+	pmax = client->response_start + client->response_len; // max position for checks, to protect against broken responses
+
+	nwords = unpack_int ( &p );
+	*out_num_keywords = nwords;
+
+	len = nwords*sizeof(sphinx_keyword_info);
+	res = (sphinx_keyword_info*) malloc ( len );
+	if ( !res )
+	{
+		set_error ( client, "malloc() failed (bytes=%d)", len );
+		return NULL;
+	}
+	memset ( res, 0, len );
+
+	for ( i=0; i<nwords && p<pmax; i++ )
+	{
+		res[i].tokenized = strdup ( unpack_str ( &p ) );
+		res[i].normalized = strdup ( unpack_str ( &p ) );
+		if ( hits )
+		{
+			res[i].num_docs = unpack_int ( &p );
+			res[i].num_hits = unpack_int ( &p );
+		}
+	}
+	// FIXME! add check for incomplete reply
+
+	return res;
+}
+
 //
-// $Id: sphinxclient.c 29 2008-07-08 21:32:57Z shodan $
+// $Id: sphinxclient.c 50 2008-07-15 13:20:30Z shodan $
 //

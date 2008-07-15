@@ -6,8 +6,8 @@
 // Copyright (c) 2008, Andrew Aksyonoff. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify
-// it under the terms of the GNU General Public License. You should have
-// received a copy of the GPL license along with this program; if you
+// it under the terms of the GNU Library General Public License. You should
+// have received a copy of the LGPL license along with this program; if you
 // did not, you can find it at http://www.gnu.org/
 //
 
@@ -147,8 +147,8 @@ void test_excerpt ( sphinx_client * client )
 void test_update ( sphinx_client * client )
 {
 	const char * attr = "group_id";
-	const uint64_t id = 2;
-	const uint64_t val = 123;
+	const sphinx_uint64_t id = 2;
+	const sphinx_uint64_t val = 123;
 	int res;
 
 	res = sphinx_update_attributes ( client, "test1", 1, &attr, 1, &id, &val );
@@ -156,6 +156,27 @@ void test_update ( sphinx_client * client )
 		printf ( "update failed: %s\n\n", sphinx_error(client) );
 	else
 		printf ( "update success, %d rows updated\n\n", res );
+}
+
+
+void test_keywords ( sphinx_client * client )
+{
+	int i, nwords;
+	sphinx_keyword_info * words;
+
+	words = sphinx_build_keywords ( client, "hello test one", "test1", SPH_TRUE, &nwords );
+	if ( !words )
+	{
+		printf ( "build_keywords failed: %s\n\n", sphinx_error(client) );
+	} else
+	{
+		printf ( "build_keywords result:\n" );
+		for ( i=0; i<nwords; i++ )
+			printf ( "%d. tokenized=%s, normalized=%s, docs=%d, hits=%d\n", 1+i,
+				words[i].tokenized, words[i].normalized,
+				words[i].num_docs, words[i].num_hits );
+		printf ( "\n" );
+	}
 }
 
 
@@ -173,6 +194,7 @@ int main ()
 	test_excerpt ( client );
 	test_update ( client );
 	test_query ( client );
+	test_keywords ( client );
 
 	sphinx_destroy ( client );
 	return 0;

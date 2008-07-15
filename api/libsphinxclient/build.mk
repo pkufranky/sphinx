@@ -24,7 +24,6 @@ $(config_h_in): configure
 configure: aclocal.m4 configure.in
 	@echo rebuilding $@
 	$(LIBTOOLIZE) --copy
-	$(AUTOUPDATE)
 	$(AUTOCONF) $(SUPPRESS_WARNINGS)
 
 makefiles: configure Makefile.am

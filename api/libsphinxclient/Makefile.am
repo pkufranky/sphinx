@@ -9,5 +9,5 @@ test_SOURCES = test.c
 libsphinxclient_la_LIBADD = @LTLIBOBJS@
 libsphinxclient_la_LDFLAGS = -release @VERSION@
 
-include_HEADERS =   sphinxclient.h sphinxclient_config.h
+include_HEADERS =   sphinxclient.h 
 test_LDADD = .libs/libsphinxclient.a

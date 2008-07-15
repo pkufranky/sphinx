@@ -1,13 +1,13 @@
 //
-// $Id: sphinxclient.h 27 2008-04-04 13:39:05Z shodan $
+// $Id: sphinxclient.h 50 2008-07-15 13:20:30Z shodan $
 //
 
 //
 // Copyright (c) 2008, Andrew Aksyonoff. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify
-// it under the terms of the GNU General Public License. You should have
-// received a copy of the GPL license along with this program; if you
+// it under the terms of the GNU Library General Public License. You should
+// have received a copy of the LGPL license along with this program; if you
 // did not, you can find it at http://www.gnu.org/
 //
 
@@ -16,24 +16,6 @@
 
 #ifdef	__cplusplus
 extern "C" {
-#endif
-
-#ifndef _WIN32
-# include "sphinxclient_config.h"
-#endif
-
-// for 64-bti types
-#ifdef HAVE_STDINT_H
-#include <stdint.h>
-#endif
-
-#if HAVE_INTTYPES_H
-#define __STDC_FORMAT_MACROS
-#include <inttypes.h>
-#endif
-
-#if HAVE_SYS_TYPES_H
-#include <sys/types.h>
 #endif
 
 /// known searchd status codes
@@ -107,44 +89,14 @@ enum
 
 //////////////////////////////////////////////////////////////////////////
 
-#if defined(U64C) || defined(I64C)
-#error "Internal 64-bit integer macros already defined."
-#endif
-
-#if !HAVE_STDINT_H
-
 #if defined(_MSC_VER)
-typedef __int64 int64_t;
-typedef unsigned __int64 uint64_t;
-#define U64C(v) v ## UI64
-#define I64C(v) v ## I64
-#define PRIu64 "I64d"
-#define PRIi64 "I64d"
+typedef __int64				sphinx_int64_t;
+typedef unsigned __int64	sphinx_uint64_t;
 #else // !defined(_MSC_VER)
-typedef long long int64_t;
-typedef unsigned long long uint64_t;
+typedef long long			sphinx_int64_t;
+typedef unsigned long long	sphinx_uint64_t;
 #endif // !defined(_MSC_VER)
 
-#endif // no stdint.h
-
-// if platform-specific macros were not supplied, use common defaults
-#ifndef U64C
-#define U64C(v) v ## ULL
-#endif
-
-#ifndef I64C
-#define I64C(v) v ## LL
-#endif
-
-#ifndef PRIu64
-#define PRIu64 "llu"
-#endif
-
-#ifndef PRIi64
-#define PRIi64 "lld"
-#endif
-
-//////////////////////////////////////////////////////////////////////////
 
 typedef int					sphinx_bool;
 #define SPH_TRUE			1
@@ -201,6 +153,15 @@ typedef struct st_sphinx_excerpt_options
 	sphinx_bool				weight_order;
 } sphinx_excerpt_options;
 
+
+typedef struct st_sphinx_keyword_info
+{
+	char *					tokenized;
+	char *					normalized;
+	int						num_docs;
+	int						num_hits;
+} sphinx_keyword_info;
+
 //////////////////////////////////////////////////////////////////////////
 
 sphinx_client *				sphinx_create	( sphinx_bool copy_args );
@@ -219,9 +180,9 @@ sphinx_bool					sphinx_set_sort_mode			( sphinx_client * client, int mode, const
 sphinx_bool					sphinx_set_field_weights		( sphinx_client * client, int num_weights, const char ** field_names, const int * field_weights );
 sphinx_bool					sphinx_set_index_weights		( sphinx_client * client, int num_weights, const char ** index_names, const int * index_weights );
 
-sphinx_bool					sphinx_set_id_range				( sphinx_client * client, uint64_t minid, uint64_t maxid );
-sphinx_bool					sphinx_add_filter				( sphinx_client * client, const char * attr, int num_values, const uint64_t * values, sphinx_bool exclude );
-sphinx_bool					sphinx_add_filter_range			( sphinx_client * client, const char * attr, uint64_t umin, uint64_t umax, sphinx_bool exclude );
+sphinx_bool					sphinx_set_id_range				( sphinx_client * client, sphinx_uint64_t minid, sphinx_uint64_t maxid );
+sphinx_bool					sphinx_add_filter				( sphinx_client * client, const char * attr, int num_values, const sphinx_uint64_t * values, sphinx_bool exclude );
+sphinx_bool					sphinx_add_filter_range			( sphinx_client * client, const char * attr, sphinx_uint64_t umin, sphinx_uint64_t umax, sphinx_bool exclude );
 sphinx_bool					sphinx_add_filter_float_range	( sphinx_client * client, const char * attr, float fmin, float fmax, sphinx_bool exclude );
 sphinx_bool					sphinx_set_geoanchor			( sphinx_client * client, const char * attr_latitude, const char * attr_longitude, float latitude, float longitude );
 sphinx_bool					sphinx_set_groupby				( sphinx_client * client, const char * attr, int groupby_func, const char * group_sort );
@@ -235,16 +196,17 @@ sphinx_result *				sphinx_query					( sphinx_client * client, const char * query
 int							sphinx_add_query				( sphinx_client * client, const char * query, const char * index_list, const char * comment );
 sphinx_result *				sphinx_run_queries				( sphinx_client * client );
 
-uint64_t					sphinx_get_id					( sphinx_result * result, int match );
+int							sphinx_get_num_results			( sphinx_client * client );
+sphinx_uint64_t				sphinx_get_id					( sphinx_result * result, int match );
 int							sphinx_get_weight				( sphinx_result * result, int match );
-uint64_t					sphinx_get_int					( sphinx_result * result, int match, int attr );
+sphinx_uint64_t				sphinx_get_int					( sphinx_result * result, int match, int attr );
 float						sphinx_get_float				( sphinx_result * result, int match, int attr );
 unsigned int *				sphinx_get_mva					( sphinx_result * result, int match, int attr );
 
 void						sphinx_init_excerpt_options		( sphinx_excerpt_options * opts );
 char **						sphinx_build_excerpts			( sphinx_client * client, int num_docs, const char ** docs, const char * index, const char * words, sphinx_excerpt_options * opts );
-
-int							sphinx_update_attributes		( sphinx_client * client, const char * index, int num_attrs, const char ** attrs, int num_docs, const uint64_t * docids, const uint64_t * values );
+int							sphinx_update_attributes		( sphinx_client * client, const char * index, int num_attrs, const char ** attrs, int num_docs, const sphinx_uint64_t * docids, const sphinx_uint64_t * values );
+sphinx_keyword_info *		sphinx_build_keywords			( sphinx_client * client, const char * query, const char * index, sphinx_bool hits, int * out_num_keywords );
 
 /////////////////////////////////////////////////////////////////////////////
 
@@ -255,5 +217,5 @@ int							sphinx_update_attributes		( sphinx_client * client, const char * index
 #endif // _sphinxclient_
 
 //
-// $Id: sphinxclient.h 27 2008-04-04 13:39:05Z shodan $
+// $Id: sphinxclient.h 50 2008-07-15 13:20:30Z shodan $
 //
