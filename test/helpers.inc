@@ -794,7 +794,7 @@ class SphinxConfig
 
 			file_put_contents ( "current", $result_f_cur );
 			file_put_contents ( "reference", $result_f_ref );
-			system ( "diff -u3 reference current > diffed.txt" );
+			system ( "diff --unified=3 reference current > diffed.txt" );
 
 			$diffed = file_get_contents ( "diffed.txt" );
 			unlink ( "current" );

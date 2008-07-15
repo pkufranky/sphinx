@@ -617,6 +617,7 @@ class SphinxClient
 
 		$this->AddQuery ( $query, $index, $comment );
 		$results = $this->RunQueries ();
+		$this->_reqs = array (); // just in case it failed too early
 
 		if ( !is_array($results) )
 			return false; // probably network error; error message should be already filled
