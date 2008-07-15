@@ -1,5 +1,5 @@
 //
-// $Id: sphinxclient.h 50 2008-07-15 13:20:30Z shodan $
+// $Id$
 //
 
 //
@@ -217,5 +217,5 @@ sphinx_keyword_info *		sphinx_build_keywords			( sphinx_client * client, const c
 #endif // _sphinxclient_
 
 //
-// $Id: sphinxclient.h 50 2008-07-15 13:20:30Z shodan $
+// $Id$
 //
