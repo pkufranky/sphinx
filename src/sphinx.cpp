@@ -7810,7 +7810,7 @@ bool CSphIndex_VLN::Merge ( CSphIndex * pSource, CSphVector<CSphFilter> & dFilte
 		if ( iAttr<0 )
 			continue;
 
-		const CSphColumnInfo & tCol = m_tSchema.GetAttr(i);
+		const CSphColumnInfo & tCol = m_tSchema.GetAttr(iAttr);
 		dFilters[i].m_iBitOffset = tCol.m_iBitOffset;
 		dFilters[i].m_iBitCount = tCol.m_iBitCount;
 		dFilters[i].m_iRowitem = tCol.m_iRowitem;
@@ -7860,7 +7860,12 @@ bool CSphIndex_VLN::Merge ( CSphIndex * pSource, CSphVector<CSphFilter> & dFilte
 				m_tProgress.m_iWords++;
 			}
 			
-			if ( !tDstWord.Read() )
+			if ( tDstWord.Read() )
+			{
+				if ( tDstWord.IsEmpty () )
+					continue;
+			}
+			else
 				uProgress &= ~0x01;
 		}
 		else if ( ( ( uProgress & 0x02 ) && tDstWord.m_tWordIndex > tSrcWord.m_tWordIndex ) || !( uProgress & 0x01 ) )
@@ -7871,7 +7876,12 @@ bool CSphIndex_VLN::Merge ( CSphIndex * pSource, CSphVector<CSphFilter> & dFilte
 				m_tProgress.m_iWords++;
 			}
 
-			if ( !tSrcWord.Read() )
+			if ( tSrcWord.Read() )
+			{
+				if ( tSrcWord.IsEmpty () )
+					continue;		
+			}
+			else
 				uProgress &= ~0x02;
 		}
 		else
@@ -18725,7 +18735,7 @@ void CSphWordDataRecord::Read( CSphMergeSource * pSource, CSphMergeData * pMerge
 		if ( i == ( dWordPosIndex.GetLength() - 1 ) )
 		{
 			if ( iStartIndex > 0)
-				m_dWordPos.Resize( iStartIndex + 1 );
+				m_dWordPos.Resize( iStartIndex );
 			else
 				m_dWordPos.Reset();
 		}
@@ -18738,6 +18748,9 @@ void CSphWordDataRecord::Read( CSphMergeSource * pSource, CSphMergeData * pMerge
 			for ( int iWordPos = iStartIndex; iWordPos < iNewSize; iWordPos++ )
 				m_dWordPos[iWordPos] = m_dWordPos[iWordPos+iRemoveSize];
 			m_dWordPos.Resize( iNewSize );
+
+			for ( int j = i+1; j < dWordPosIndex.GetLength (); j++ )
+				dWordPosIndex [j] -= iRemoveSize;
 		}				
 	}
 	
