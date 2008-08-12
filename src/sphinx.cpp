@@ -18710,7 +18710,7 @@ void CSphWordDataRecord::Read( CSphMergeSource * pSource, CSphMergeData * pMerge
 				else
 				{
 					const DWORD * pDocinfo = pSource->m_pIndex->FindDocinfo ( tDoc.m_iDocID );
-					uValue = sphGetRowAttr ( pDocinfo, tFilter.m_iBitOffset, tFilter.m_iBitCount );
+					uValue = sphGetRowAttr ( DOCINFO2ATTRS (pDocinfo), tFilter.m_iBitOffset, tFilter.m_iBitCount );
 				}
 
 				if ( tFilter.m_bExclude ^ ( uValue<tFilter.m_uMinValue || uValue>tFilter.m_uMaxValue ) )
