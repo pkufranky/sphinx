@@ -18903,7 +18903,8 @@ void CSphDocMVA::Read( CSphReader_VLN & tReader )
 		{
 			DWORD iValues = tReader.GetDword();
 			m_dMVA[i].Resize( iValues );
-			tReader.GetBytes( &m_dMVA[i][0], iValues * sizeof(DWORD) );
+			if ( iValues )
+				tReader.GetBytes( &m_dMVA[i][0], iValues * sizeof(DWORD) );
 		}
 	}	
 }
@@ -18917,7 +18918,8 @@ void CSphDocMVA::Write( CSphWriter & tWriter )
 
 		int iValues = m_dMVA[i].GetLength();
 		tWriter.PutDword ( iValues );
-		tWriter.PutBytes ( &m_dMVA[i][0], iValues*sizeof(DWORD) );
+		if ( iValues )
+			tWriter.PutBytes ( &m_dMVA[i][0], iValues*sizeof(DWORD) );
 	}
 }
 
