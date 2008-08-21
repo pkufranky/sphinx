@@ -1428,6 +1428,7 @@ struct CSphWordDataRecord
 	int									m_iRowitems;
 	CSphVector<DWORD>					m_dWordPos;
 	CSphVector<CSphDoclistRecord>		m_dDoclist;
+	CSphVector<bool>					m_dFilteredDocs; // OPTIMIZE!
 	DWORD								m_iLeadingZero;
 	bool								m_bFilter;
 
@@ -7905,6 +7906,9 @@ bool CSphIndex_VLN::Merge ( CSphIndex * pSource, CSphVector<CSphFilter> & dFilte
 
 			if ( !tSrcWord.Read() )
 				uProgress &= ~0x02;
+
+			if ( tSrcWord.IsEmpty () && tDstWord.IsEmpty () )
+				continue;
 		}
 
 		if ( iWordListEntries == 0 )
@@ -18664,11 +18668,7 @@ void CSphWordDataRecord::Read( CSphMergeSource * pSource, CSphMergeData * pMerge
 {
 	assert ( pSource );
 	assert ( pMergeData );
-	
-	CSphVector<DWORD> dWordPosIndex;
-	dWordPosIndex.Reserve ( 1024 );
 
-	DWORD iWordPos = 0;
 	CSphReader_VLN * pReader = pSource->m_pDoclistReader;
 	CSphReader_VLN * pHitlistReader = pSource->m_pHitlistReader;
 	assert ( pReader && pHitlistReader );
@@ -18677,18 +18677,8 @@ void CSphWordDataRecord::Read( CSphMergeSource * pSource, CSphMergeData * pMerge
 	m_dWordPos.Resize ( 0 );
 	m_dDoclist.Reserve ( 1024 );
 	m_dDoclist.Resize ( 0 );
-
-	for( int i = 0; i < iDocNum; i++ )
-	{
-		dWordPosIndex.Add( m_dWordPos.GetLength() );
-		do 
-		{
-			iWordPos = pHitlistReader->UnzipInt ();
-			m_dWordPos.Add ( iWordPos );
-			if ( iWordPos == 0 )
-				break;
-		} while ( iWordPos );
-	}
+	m_dFilteredDocs.Reserve ( 1024 );
+	m_dFilteredDocs.Resize ( 0 );
 
 	CSphDoclistRecord tDoc;
 
@@ -18721,37 +18711,29 @@ void CSphWordDataRecord::Read( CSphMergeSource * pSource, CSphMergeData * pMerge
 			}
 		}
 
+		m_dFilteredDocs.Add ( bOK );
+
 		if ( bOK )
 		{
 			m_dDoclist.Add( tDoc );
 			continue;
 		}
+	}
 
-		// this document must be filtered out
-		// remove word positions
-		assert ( i < dWordPosIndex.GetLength() );
-		DWORD iStartIndex = dWordPosIndex[i];
-
-		if ( i == ( dWordPosIndex.GetLength() - 1 ) )
+	DWORD iWordPos;
+	for( int i=0; i<iDocNum; i++ )
+	{
+		if ( m_dFilteredDocs[i] )
 		{
-			if ( iStartIndex > 0)
-				m_dWordPos.Resize( iStartIndex );
-			else
-				m_dWordPos.Reset();
+			do
+			{
+				iWordPos = pHitlistReader->UnzipInt ();
+				m_dWordPos.Add ( iWordPos );
+			}
+			while ( iWordPos );
 		}
 		else
-		{
-			DWORD iLastIndex = dWordPosIndex[i + 1];
-			int iRemoveSize = iLastIndex - iStartIndex;
-			int iNewSize = m_dWordPos.GetLength() - iRemoveSize;
-
-			for ( int iWordPos = iStartIndex; iWordPos < iNewSize; iWordPos++ )
-				m_dWordPos[iWordPos] = m_dWordPos[iWordPos+iRemoveSize];
-			m_dWordPos.Resize( iNewSize );
-
-			for ( int j = i+1; j < dWordPosIndex.GetLength (); j++ )
-				dWordPosIndex [j] -= iRemoveSize;
-		}				
+			while ( pHitlistReader->UnzipInt () );
 	}
 	
 	m_iLeadingZero = pReader->UnzipInt ();
