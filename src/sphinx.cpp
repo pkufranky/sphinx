@@ -2347,7 +2347,8 @@ void CSphLowercaser::AddRemaps ( const CSphVector<CSphRemapRange> & dRemaps, DWO
 			assert ( m_pChunk [ j>>CHUNK_BITS ] );
 			int & iCodepoint = m_pChunk [ j>>CHUNK_BITS ] [ j & CHUNK_MASK ];
 			bool bWordPart = ( iCodepoint & MASK_CODEPOINT ) && !( iCodepoint & FLAG_CODEPOINT_SYNONYM );
-			iCodepoint = ( bWordPart ? uFlagsIfExists : uFlags ) | ( iCodepoint & MASK_FLAGS ) | iRemapped;
+			iCodepoint = ( iCodepoint & FLAG_CODEPOINT_IGNORE ) ? ( iRemapped | uFlags ) :
+				( ( bWordPart ? uFlagsIfExists : uFlags ) | ( iCodepoint & MASK_FLAGS ) | iRemapped );
 		}
 	}
 }
