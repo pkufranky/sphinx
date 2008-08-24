@@ -7859,15 +7859,11 @@ bool CSphIndex_VLN::Merge ( CSphIndex * pSource, CSphVector<CSphFilter> & dFilte
 			if ( !tDstWord.IsEmpty() )
 			{
 				tDstWord.Write();
+				iWordListEntries++;
 				m_tProgress.m_iWords++;
 			}
 			
-			if ( tDstWord.Read() )
-			{
-				if ( tDstWord.IsEmpty () )
-					continue;
-			}
-			else
+			if ( !tDstWord.Read() )
 				uProgress &= ~0x01;
 		}
 		else if ( ( ( uProgress & 0x02 ) && tDstWord.m_tWordIndex > tSrcWord.m_tWordIndex ) || !( uProgress & 0x01 ) )
@@ -7875,15 +7871,11 @@ bool CSphIndex_VLN::Merge ( CSphIndex * pSource, CSphVector<CSphFilter> & dFilte
 			if ( !tSrcWord.IsEmpty() )
 			{
 				tSrcWord.Write();
+				iWordListEntries++;
 				m_tProgress.m_iWords++;
 			}
 
-			if ( tSrcWord.Read() )
-			{
-				if ( tSrcWord.IsEmpty () )
-					continue;		
-			}
-			else
+			if ( !tSrcWord.Read() )
 				uProgress &= ~0x02;
 		}
 		else
@@ -7900,6 +7892,7 @@ bool CSphIndex_VLN::Merge ( CSphIndex * pSource, CSphVector<CSphFilter> & dFilte
 				tDstWord.Write();
 			}
 
+			iWordListEntries++;
 			m_tProgress.m_iWords++;
 
 			if ( !tDstWord.Read() )
@@ -7907,12 +7900,9 @@ bool CSphIndex_VLN::Merge ( CSphIndex * pSource, CSphVector<CSphFilter> & dFilte
 
 			if ( !tSrcWord.Read() )
 				uProgress &= ~0x02;
-
-			if ( tSrcWord.IsEmpty () && tDstWord.IsEmpty () )
-				continue;
 		}
 
-		if ( iWordListEntries == 0 )
+		if ( iWordListEntries == 1 )
 		{
 			CSphWordlistCheckpoint tCheckpoint;
 			tCheckpoint.m_iWordID = tMerge.m_iLastWordID;
@@ -7920,8 +7910,6 @@ bool CSphIndex_VLN::Merge ( CSphIndex * pSource, CSphVector<CSphFilter> & dFilte
 
 			dWordlistCheckpoints.Add ( tCheckpoint );
 		}
-
-		iWordListEntries++;
 
 		if ( m_pProgress && !(m_tProgress.m_iWords % 500) )
 			m_pProgress ( &m_tProgress, false );
@@ -18829,6 +18817,8 @@ void CSphWordIndexRecord::Write ( CSphWriter * pWriter, CSphMergeData * pMergeDa
 	pWriter->ZipOffset ( m_iDoclistPos );
 	pWriter->ZipInt ( m_iDocNum );
 	pWriter->ZipInt ( m_iHitNum );
+
+	assert ( m_iHitNum && m_iDocNum );
 
 	pMergeData->m_iLastWordID = m_iWordID;
 }
