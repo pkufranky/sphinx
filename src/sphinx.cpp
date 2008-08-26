@@ -1455,7 +1455,7 @@ struct CSphWordDataRecord
 	}
 
 	void Read ( CSphMergeSource * pSource, CSphMergeData * pMergeData, int iDocNum );
-	void Write ( CSphMergeData * pMergeData );
+	int Write ( CSphMergeData * pMergeData );
 
 	bool IsEmpty() const
 	{
@@ -18729,7 +18729,7 @@ void CSphWordDataRecord::Read( CSphMergeSource * pSource, CSphMergeData * pMerge
 	assert( m_iLeadingZero == 0 );
 }
 
-void CSphWordDataRecord::Write ( CSphMergeData * pMergeData )
+int CSphWordDataRecord::Write ( CSphMergeData * pMergeData )
 {
 	assert ( pMergeData );
 	assert ( m_dWordPos.GetLength() );
@@ -18745,11 +18745,13 @@ void CSphWordDataRecord::Write ( CSphMergeData * pMergeData )
 	m_dDoclist[iDocCount++].m_iPos = pHitlistWriter->GetPos() - pMergeData->m_iLastHitlistPos;
 	pMergeData->m_iLastHitlistPos = pHitlistWriter->GetPos();
 
+	int iHitNum = 0;
 	ARRAY_FOREACH ( i, m_dWordPos )
 	{
 		pHitlistWriter->ZipInt ( m_dWordPos[i] );
 		if ( m_dWordPos[i] == 0 )
 		{
+			iHitNum++;
 			if ( iDocCount < m_dDoclist.GetLength() )
 				m_dDoclist[iDocCount++].m_iPos = pHitlistWriter->GetPos() - pMergeData->m_iLastHitlistPos;
 			pMergeData->m_iLastHitlistPos = pHitlistWriter->GetPos();
@@ -18764,6 +18766,8 @@ void CSphWordDataRecord::Write ( CSphMergeData * pMergeData )
 	pWriter->ZipInt ( 0 );
 
 	pMergeData->m_tStats.m_iTotalDocuments += m_dDoclist.GetLength();
+
+	return iHitNum;
 }
 
 bool CSphWordIndexRecord::Read ( const BYTE * & pSource, CSphMergeSource * pMergeSource )
@@ -18857,7 +18861,7 @@ void CSphWordRecord::Write ()
 	assert ( m_pMergeData );
 	assert ( m_pMergeSource->Check() );
 	
-	m_tWordData.Write ( m_pMergeData );
+	m_tWordIndex.m_iHitNum = m_tWordData.Write ( m_pMergeData );
 
 	m_tWordIndex.m_iDoclistPos = m_pMergeData->m_iDoclistPos - m_pMergeData->m_iLastDoclistPos;
 	m_pMergeData->m_iLastDoclistPos = m_pMergeData->m_iDoclistPos;
