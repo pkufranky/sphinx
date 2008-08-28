@@ -1185,5 +1185,3 @@ class SphinxClient
 //
 // $Id$
 //
-
-?>
