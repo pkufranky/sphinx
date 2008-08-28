@@ -8135,7 +8135,7 @@ public:
 	bool				SetMorphology ( const CSphVariant * sMorph, bool bUseUTF8, CSphString & sError ) { return m_pDict->SetMorphology ( sMorph, bUseUTF8, sError ); }
 
 	virtual SphWordID_t	GetWordID ( BYTE * pWord );
-	virtual SphWordID_t	GetWordID ( const BYTE * pWord, int iLen ) { return m_pDict->GetWordID ( pWord, iLen ); }
+	virtual SphWordID_t	GetWordID ( const BYTE * pWord, int iLen, bool bFilterStops ) { return m_pDict->GetWordID ( pWord, iLen, bFilterStops ); }
 
 protected:
 	CSphDict *			m_pDict;
@@ -8275,7 +8275,7 @@ SphWordID_t	CSphDictStarV8::GetWordID ( BYTE * pWord )
 	}
 
 	// calc id for mangled word
-	return m_pDict->GetWordID ( (BYTE*)sBuf, iLen );
+	return m_pDict->GetWordID ( (BYTE*)sBuf, iLen, !bHeadStar && !bTailStar );
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -13974,7 +13974,7 @@ struct CSphDictCRC : CSphDict
 	virtual				~CSphDictCRC ();
 
 	virtual SphWordID_t	GetWordID ( BYTE * pWord );
-	virtual SphWordID_t	GetWordID ( const BYTE * pWord, int iLen );
+	virtual SphWordID_t	GetWordID ( const BYTE * pWord, int iLen, bool bFilterStops );
 	virtual void		LoadStopwords ( const char * sFiles, ISphTokenizer * pTokenizer );
 	virtual bool		LoadWordforms ( const char * szFile, ISphTokenizer * pTokenizer );
 	virtual bool		SetMorphology ( const CSphVariant * sMorph, bool bUseUTF8, CSphString & sError );
@@ -14399,9 +14399,10 @@ SphWordID_t CSphDictCRC::GetWordID ( BYTE * pWord )
 }
 
 
-SphWordID_t CSphDictCRC::GetWordID ( const BYTE * pWord, int iLen )
+SphWordID_t CSphDictCRC::GetWordID ( const BYTE * pWord, int iLen, bool bFilterStops )
 {
-	return FilterStopword ( sphCRCWord<SphWordID_t> ( pWord, iLen ) );
+	SphWordID_t uId = sphCRCWord<SphWordID_t> ( pWord, iLen );
+	return bFilterStops ? FilterStopword ( uId ) : uId;
 }
 
 
@@ -15791,7 +15792,7 @@ bool CSphSource_Document::IterateHitsNext ( CSphString & sError )
 				// stemmed word w/o markers
 				if ( strcmp ( (const char *)sBuf + 1, (const char *)sWord ) )
 				{
-					SphWordID_t iWord = m_pDict->GetWordID ( sBuf + 1, iStemmedLen - 2 );
+					SphWordID_t iWord = m_pDict->GetWordID ( sBuf + 1, iStemmedLen - 2, true );
 					if ( iWord )
 					{
 						CSphWordHit & tHit = m_dHits.Add ();
@@ -15834,7 +15835,7 @@ bool CSphSource_Document::IterateHitsNext ( CSphString & sError )
 
 					for ( int i=iMinInfixLen; i<=iLen-iStart; i++ )
 					{
-						SphWordID_t iWord = m_pDict->GetWordID ( sInfix, sInfixEnd-sInfix );
+						SphWordID_t iWord = m_pDict->GetWordID ( sInfix, sInfixEnd-sInfix, false );
 
 						if ( iWord )
 						{
@@ -15847,7 +15848,7 @@ bool CSphSource_Document::IterateHitsNext ( CSphString & sError )
 						// word start: add magic head
 						if ( bInfixMode && iStart==0 )
 						{
-							iWord = m_pDict->GetWordID ( sInfix - 1, sInfixEnd-sInfix + 1 );
+							iWord = m_pDict->GetWordID ( sInfix - 1, sInfixEnd-sInfix + 1, false );
 							if ( iWord )
 							{
 								CSphWordHit & tHit = m_dHits.Add ();
@@ -15860,7 +15861,7 @@ bool CSphSource_Document::IterateHitsNext ( CSphString & sError )
 						// word end: add magic tail
 						if ( bInfixMode && i==iLen-iStart )
 						{
-							iWord = m_pDict->GetWordID ( sInfix, sInfixEnd-sInfix+1 );
+							iWord = m_pDict->GetWordID ( sInfix, sInfixEnd-sInfix+1, false );
 							if ( iWord )
 							{
 								CSphWordHit & tHit = m_dHits.Add ();
