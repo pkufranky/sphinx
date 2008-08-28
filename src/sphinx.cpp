@@ -18751,11 +18751,12 @@ int CSphWordDataRecord::Write ( CSphMergeData * pMergeData )
 		pHitlistWriter->ZipInt ( m_dWordPos[i] );
 		if ( m_dWordPos[i] == 0 )
 		{
-			iHitNum++;
 			if ( iDocCount < m_dDoclist.GetLength() )
 				m_dDoclist[iDocCount++].m_iPos = pHitlistWriter->GetPos() - pMergeData->m_iLastHitlistPos;
 			pMergeData->m_iLastHitlistPos = pHitlistWriter->GetPos();
 		}
+		else
+			iHitNum++;
 	}
 
 	pMergeData->m_iDoclistPos = pWriter->GetPos();
