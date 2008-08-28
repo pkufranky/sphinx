@@ -1961,7 +1961,7 @@ uint64_t sphToQword ( const char * s )
 #endif
 
 
-#if USE_WINDOWS || !HAVE_F_SETLKW
+#if USE_WINDOWS
 
 bool sphLockEx ( int iFile, bool bWait )
 {
@@ -1997,7 +1997,7 @@ bool sphLockEx ( int iFile, bool bWait )
 	tLock.l_start = 0;
 	tLock.l_len = 0;
 
-	int iCmd = bWait ? F_SETLKW : F_SETLK;
+	int iCmd = bWait ? F_SETLKW : F_SETLK; // FIXME! check for HAVE_F_SETLKW?
 	return ( fcntl ( iFile, iCmd, &tLock )!=-1 );
 }
 
