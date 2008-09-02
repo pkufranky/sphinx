@@ -12338,7 +12338,6 @@ int ExtRanker_Wordcount_c::GetMatches ( int, const int * pWeights )
 	int iMatches = 0;
 	const ExtHit_t * pHlist = m_pHitlist;
 	const ExtDoc_t * pDocs = m_pDoclist;
-	SphDocID_t uMaxID = 0;
 
 	// warmup if necessary
 	if ( !pHlist )
@@ -12346,7 +12345,7 @@ int ExtRanker_Wordcount_c::GetMatches ( int, const int * pWeights )
 		if ( !pDocs ) pDocs = GetFilteredDocs ();
 		if ( !pDocs ) return iMatches;
 
-		pHlist = m_pRoot->GetHitsChunk ( pDocs, uMaxID );
+		pHlist = m_pRoot->GetHitsChunk ( pDocs, m_uMaxID );
 		if ( !pHlist ) return iMatches;
 	}
 
@@ -12364,7 +12363,7 @@ int ExtRanker_Wordcount_c::GetMatches ( int, const int * pWeights )
 			if ( pHlist->m_uDocid==DOCID_MAX )
 			{
 				assert ( pDocs );
-				pHlist = m_pRoot->GetHitsChunk ( pDocs, uMaxID );
+				pHlist = m_pRoot->GetHitsChunk ( pDocs, m_uMaxID );
 				if ( pHlist )
 					continue;
 			}
@@ -12391,7 +12390,7 @@ int ExtRanker_Wordcount_c::GetMatches ( int, const int * pWeights )
 					break;
 
 				// we do, get some hits
-				pHlist = m_pRoot->GetHitsChunk ( pDocs, uMaxID );
+				pHlist = m_pRoot->GetHitsChunk ( pDocs, m_uMaxID );
 				assert ( pHlist ); // fresh docs block, must have hits
 			}
 
