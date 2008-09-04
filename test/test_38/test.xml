@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <test>
 
-<name>wordcount</name>
+<name>stemming</name>
 
 <config>
 indexer
@@ -18,7 +18,6 @@ source srctest
 {
 	type			= mysql
 	<sql_settings/>
-
 	sql_query		= SELECT * FROM test_table
 }
 
@@ -27,16 +26,13 @@ index test
 	source			= srctest
 	path			= <data_path/>/test
     charset_type 	= utf-8
-	morphology = stem_ru, stem_en
-	charset_table = 0..9, A..Z->a..z, _, a..z, U+410..U+42F->U+430..U+44F, U+430..U+44F
+	morphology		= stem_ru, stem_en
 }
 </config>
 
 <queries>
-<query mode="extended2" ranker="proximity_bm25">"зимние шины"</query>
-<query mode="extended2" ranker="bm25">"зимние шины"</query>
-<query mode="extended2" ranker="none">"зимние шины"</query>
-<query mode="extended2" ranker="wordcount">"зимние шины"</query>
+<!-- long query after proximity length was not properly 0-terminated, and caused overlong token to be passed to stemmer, and crash -->
+<query mode="extended2">"one two"~3                                                                                                                                                                                                                                                                                                                                                                            three</query>
 </queries>
 
 <db_create>
@@ -53,7 +49,7 @@ DROP TABLE IF EXISTS `test_table`
 
 <db_insert>
 INSERT INTO `test_table` VALUES
-( 2,  'зимние шины диски чего то тут зимние шины' )
+( 1,  'and nothing else matters' )
 </db_insert>
 
 </test>

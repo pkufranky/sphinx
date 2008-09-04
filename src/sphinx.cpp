@@ -14638,7 +14638,7 @@ bool CSphDictCRC::SetMorphology ( const CSphVariant * sMorph, bool bUseUTF8, CSp
 bool CSphDictCRC::StemById ( BYTE * pWord, int iStemmer )
 {
 	char szBuf [4*SPH_MAX_WORD_LEN];
-	strcpy ( szBuf, (char *)pWord );
+	strncpy ( szBuf, (char *)pWord, sizeof(szBuf) );
 
 	switch ( iStemmer )
 	{
