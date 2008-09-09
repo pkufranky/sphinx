@@ -3213,6 +3213,9 @@ BYTE * CSphTokenizerTraits<IS_UTF8>::GetTokenSyn ()
 				return m_sAccum;
 			}
 
+			// handle specials
+			bool bJustSpecial = ( iFolded & FLAG_CODEPOINT_SPECIAL ) && !( iFolded & FLAG_CODEPOINT_DUAL ); // OPTIMIZE?
+
 			// if candidate starts with something special, and turns out to be not a synonym,
 			// we will need to rescan from current position later
 			if ( iSynOff==0 )
@@ -3241,7 +3244,7 @@ BYTE * CSphTokenizerTraits<IS_UTF8>::GetTokenSyn ()
 			int iTest;
 
 			int iMasked = ( iCode & MASK_CODEPOINT );
-			if ( iFolded<=0 )
+			if ( iFolded<=0 || bJustSpecial )
 			{
 				sTest[0] = MAGIC_SYNONYM_WHITESPACE;
 				iTest = 1;
@@ -3267,6 +3270,7 @@ BYTE * CSphTokenizerTraits<IS_UTF8>::GetTokenSyn ()
 			#define LOC_RETURN_SYNONYM(_idx) \
 			{ \
 				m_pTokenEnd = pCur; \
+				if ( bJustSpecial ) m_pCur = pCur; \
 				strcpy ( (char*)m_sAccum, m_dSynonyms[_idx].m_sTo.cstr() ); \
 				m_iLastTokenLen = m_dSynonyms[_idx].m_iToLen; \
 				return m_sAccum; \
