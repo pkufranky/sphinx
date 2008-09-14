@@ -679,6 +679,8 @@ protected:
 
 	void				PushNode ();					///< push new empty node onto stack
 	void				PopNode ( bool bReject=false);	///< pop node off the stack to proper list
+
+	bool				IsSpecial ( char c );
 };
 
 
@@ -1016,6 +1018,12 @@ static void DeleteNodesWOFields ( CSphExtendedQueryNode * pNode )
 }
 
 
+bool CSphExtendedQueryParser::IsSpecial ( char c )
+{
+	return c=='(' || c==')' || c=='|' || c=='-' || c=='!' || c=='@' || c=='~' || c=='"' || c=='/';
+}
+
+
 bool CSphExtendedQueryParser::Parse ( CSphExtendedQuery & tParsed, const char * sQuery, const ISphTokenizer * pTokenizer, const CSphSchema * pSchema, CSphDict * pDict )
 {
 	assert ( sQuery );
@@ -1072,6 +1080,7 @@ bool CSphExtendedQueryParser::Parse ( CSphExtendedQuery & tParsed, const char * 
 	for ( ;; )
 	{
 		// get next token
+		char sNumberBuf[16];
 		if ( !bRedo )
 		{
 			// tricky stuff
@@ -1088,14 +1097,14 @@ bool CSphExtendedQueryParser::Parse ( CSphExtendedQuery & tParsed, const char * 
 				sToken = p;
 				while ( p<sEnd && isdigit(*p) ) p++;
 
-				if ( p>sToken && ( *p=='\0' || isspace(*p) ) )
+				if ( p>sToken && ( *p=='\0' || isspace(*p) || IsSpecial(*p) ) )
 				{
-					// got a number followed by a whitespace, so skip it
-					if ( *p )
-					{
-						assert ( isspace(*p) );
-						*p++ = '\0';
-					}
+					// got a number followed by a whitespace or special, handle it
+					int iNumberLen = Min ( sizeof(sNumberBuf)-1, p-sToken );
+					memcpy ( sNumberBuf, sToken, iNumberLen );
+					sNumberBuf[iNumberLen] = '\0';
+					sToken = sNumberBuf;
+
 					pMyTokenizer->SetBufferPtr ( p );
 					bSpecial = false;
 
