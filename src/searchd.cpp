@@ -753,16 +753,27 @@ const int		SEARCHD_MAX_ATTR_VALUES	= 4096;
 #pragma warning(disable:4127) // conditional expr is const
 #pragma warning(disable:4389) // signed/unsigned mismatch
 
-void SPH_FD_SET ( int fd, fd_set * fdset ) { FD_SET ( fd, fdset ); }
+void _SPH_FD_SET ( int fd, fd_set * fdset ) { FD_SET ( fd, fdset ); }
 
 #pragma warning(default:4127) // conditional expr is const
 #pragma warning(default:4389) // signed/unsigned mismatch
 
 #else // !USE_WINDOWS
 
-#define	SPH_FD_SET FD_SET
+#define	_SPH_FD_SET FD_SET
 
 #endif
+
+#define SPH_FDSET_OVERFLOW(_fd) ((_fd) < 0 || (_fd) >= FD_SETSIZE)
+#define SPH_FD_SET sphFDSet
+
+void sphFDSet ( int fd, fd_set * set)
+{
+	if ( SPH_FDSET_OVERFLOW(fd) )
+		sphFatal ( "sphFDSet() failed fd=%d, FD_SETSIZE=%d", fd, FD_SETSIZE );
+	else
+		_SPH_FD_SET ( fd, set );
+}
 
 
 const char * sphSockError ( int iErr=0 )
@@ -5299,10 +5310,6 @@ int WINAPI ServiceMain ( int argc, char **argv )
 		sphFatal ( "seamless_rotate is not supported in windows; set seamless_rotate=0" );
 #endif
 
-	//////////////////////
-	// build indexes hash
-	//////////////////////
-
 	// create and lock pid
 	if ( bOptPIDFile )
 	{
@@ -5315,6 +5322,37 @@ int WINAPI ServiceMain ( int argc, char **argv )
 		if ( !sphLockEx ( g_iPidFD, false ) )
 			sphFatal ( "failed to lock pid file '%s': %s (searchd already running?)", g_sPidFile, strerror(errno) );
 	}
+
+	////////////////////
+	// network startup
+	////////////////////
+
+	// create and bind socket
+	DWORD uAddr = htonl(INADDR_ANY);
+	if ( hSearchd("address") )
+	{
+		struct hostent * pHost = gethostbyname ( hSearchd["address"].cstr() );
+		if ( !pHost || pHost->h_addrtype!=AF_INET )
+		{
+			sphWarning ( "no AF_INET address associated with %s, listening on INADDR_ANY", hSearchd["address"].cstr() );
+		} else
+		{
+			assert ( sizeof(DWORD)==pHost->h_length );
+			memcpy ( &uAddr, pHost->h_addr, sizeof(uAddr) );
+		}
+	}
+	g_iSocket = sphCreateServerSocket ( uAddr, iPort );
+	listen ( g_iSocket, 5 );
+
+#if !USE_WINDOWS
+	// reserve an fd for clients
+	int iDevNull = open ( "/dev/null", O_RDWR );
+	int iClientFD = dup(iDevNull);
+#endif
+
+	//////////////////////
+	// build indexes hash
+	//////////////////////
 
 	// configure and preload
 	int iValidIndexes = 0;
@@ -5613,7 +5651,6 @@ int WINAPI ServiceMain ( int argc, char **argv )
 
 		// do daemonize
 #if !USE_WINDOWS
-		int iDevNull = open ( "/dev/null", O_RDWR );
 		close ( STDIN_FILENO );
 		close ( STDOUT_FILENO );
 		close ( STDERR_FILENO );
@@ -5717,27 +5754,6 @@ int WINAPI ServiceMain ( int argc, char **argv )
 		// if we're running in console mode, dump queries to tty as well
 		g_iQueryLogFile = g_iLogFile;
 	}
-
-	////////////////////
-	// network startup
-	////////////////////
-
-	// create and bind socket
-	DWORD uAddr = htonl(INADDR_ANY);
-	if ( hSearchd("address") )
-	{
-		struct hostent * pHost = gethostbyname ( hSearchd["address"].cstr() );
-		if ( !pHost || pHost->h_addrtype!=AF_INET )
-		{
-			sphWarning ( "no AF_INET address associated with %s, listening on INADDR_ANY", hSearchd["address"].cstr() );
-		} else
-		{
-			assert ( sizeof(DWORD)==pHost->h_length );
-			memcpy ( &uAddr, pHost->h_addr, sizeof(uAddr) );
-		}
-	}
-	g_iSocket = sphCreateServerSocket ( uAddr, iPort );
-	listen ( g_iSocket, 5 );
 
 	/////////////////
 	// serve clients
@@ -5877,6 +5893,10 @@ int WINAPI ServiceMain ( int argc, char **argv )
 
 		if ( bOptConsole || g_bService )
 		{
+			#if !USE_WINDOWS
+			if ( SPH_FDSET_OVERFLOW(rsock) )
+				rsock = dup2 ( rsock, iClientFD );
+			#endif
 			HandleClient ( rsock, sClientIP, -1 );
 			sphSockClose ( rsock );
 			continue;
@@ -5890,6 +5910,10 @@ int WINAPI ServiceMain ( int argc, char **argv )
 		if ( !g_bHeadDaemon )
 		{
 			// child process, handle client
+			#if !USE_WINDOWS
+			if ( SPH_FDSET_OVERFLOW(rsock) )
+				rsock = dup2 ( rsock, iClientFD );
+			#endif
 			HandleClient ( rsock, sClientIP, iChildPipe );
 			sphSockClose ( rsock );
 			exit ( 0 );
