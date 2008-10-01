@@ -2231,7 +2231,12 @@ is enabled in the index, "shoes" will be highlighted even if keyword is "shoe".
 </varlistentry>
 <varlistentry>
 	<term>"single_passage":</term>
-	<listitem>whether to extract single best passage only. Boolean, default is false.</listitem>
+	<listitem>Whether to extract single best passage only. Boolean, default is false.</listitem>
+</varlistentry>
+<varlistentry>
+	<term>"weight_order":</term>
+	<listitem>Whether to sort the extracted passages in order of relevance (decreasing weight),
+	or in order of appearance in the document (increasing position). Boolean, default is false.</listitem>
 </varlistentry>
 </variablelist>
 </para>

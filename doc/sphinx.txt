@@ -2145,7 +2145,12 @@ a hash which contains additional optional highlighting parameters:
    individual keywords. Boolean, default is false.
 
 "single_passage":
-   whether to extract single best passage only. Boolean, default is false.
+   Whether to extract single best passage only. Boolean, default is false.
+
+"weight_order":
+   Whether to sort the extracted passages in order of relevance (decreasing
+   weight), or in order of appearance in the document (increasing
+   position). Boolean, default is false.
 
 Returns false on failure. Returns a plain array of strings with excerpts
 (snippets) on success.
