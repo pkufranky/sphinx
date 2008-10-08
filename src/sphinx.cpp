@@ -8087,9 +8087,9 @@ void CSphIndex_VLN::MergeWordData ( CSphWordRecord & tDstWord, CSphWordRecord & 
 
 				if ( uCompleted != 0x03 )
 				{
-					if ( iDstPos <= iSrcPos )
+					if ( iDstPos && ( iDstPos <= iSrcPos || !iSrcPos ) )
 						dWordPos.Add ( iDstPos );
-					else if ( iDstPos > iSrcPos )
+					else if ( iSrcPos && ( iSrcPos <= iDstPos || !iDstPos ) )
 						dWordPos.Add ( iSrcPos );
 
 					iTotalHits++;
