@@ -207,11 +207,14 @@ public class SphinxClient
 		if ( str==null )
 		{
 			ostream.writeInt ( 0 );
-		} else
-		{
-			ostream.writeShort ( 0 );
-			ostream.writeUTF ( str );
+			return;
 		}
+
+		byte[] sBytes = str.getBytes ( "UTF-8" );
+		int iLen = sBytes.length;
+
+		ostream.writeInt ( iLen );
+		ostream.write ( sBytes );
 	}
 
 	/** Internal method. String IO helper. */
