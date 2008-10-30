@@ -4920,6 +4920,7 @@ unlink_old = 0
 <itemizedlist>
 <listitem>added configure script to libsphinxclient</listitem>
 <listitem>changed proximity/quorum operator syntax to require whitespace after length</listitem>
+<listitem>fixed potential head process crash on SIGPIPE during "maxed out" message</listitem>
 <listitem>fixed handling of incomplete remote replies (caused over-degraded distributed results, in rare cases)</listitem>
 <listitem>fixed sending of big remote requests (caused distributed requests to fail, in rare cases)</listitem>
 <listitem>fixed FD_SET() overflow (caused searchd to crash on startup, in rare cases)</listitem>

@@ -4314,6 +4314,8 @@ A.1. Version 0.9.8.1, 30 oct 2008
    * added configure script to libsphinxclient
    * changed proximity/quorum operator syntax to require whitespace after
      length
+   * fixed potential head process crash on SIGPIPE during "maxed out"
+     message
    * fixed handling of incomplete remote replies (caused over-degraded
      distributed results, in rare cases)
    * fixed sending of big remote requests (caused distributed requests to
