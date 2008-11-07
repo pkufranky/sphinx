@@ -8104,12 +8104,12 @@ void CSphIndex_VLN::MergeWordData ( CSphWordRecord & tDstWord, CSphWordRecord & 
 			iSrcCount++;
 
 			if ( iDstCount < iDstDocNum )
-				iDstDocID += pDstData->m_dDoclist[iDstCount].m_iDocID;
+				iDstDocID = pDstData->m_dDoclist[iDstCount].m_iDocID;
 			else
 				iDstDocID = 0;
 
 			if ( iSrcCount < iSrcDocNum )
-				iSrcDocID += pSrcData->m_dDoclist[iSrcCount].m_iDocID;
+				iSrcDocID = pSrcData->m_dDoclist[iSrcCount].m_iDocID;
 			else
 				iSrcDocID = 0;
 		}
