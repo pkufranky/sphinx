@@ -13108,9 +13108,19 @@ const CSphSchema * CSphIndex_VLN::Prealloc ( bool bMlock, CSphString * sWarning 
 		return NULL;
 
 	assert ( m_iCheckpointsPos>0 && m_iCheckpointsPos<INT_MAX );
-	m_pWordlistCheckpoints = ( m_iCheckpointsPos>=iWordlistLen )
-		? NULL
-		: (CSphWordlistCheckpoint *)( &m_pWordlist[int(m_iCheckpointsPos)] );
+
+	int64_t iTail = (int64_t)iWordlistLen - (int64_t)m_iCheckpointsPos;
+	if ( iTail > 0 )
+	{
+		if ( iTail != (int64_t)m_iWordlistCheckpoints * (int64_t)sizeof(CSphWordlistCheckpoint) )
+		{
+			m_sLastError.SetSprintf ( "checkpoint segment size mismatch (rebuild the index)" );
+			return NULL;
+		}
+		m_pWordlistCheckpoints = (CSphWordlistCheckpoint*)&m_pWordlist[m_iCheckpointsPos];
+	}
+	else
+		m_pWordlistCheckpoints = NULL;
 
 	if ( m_bKeepFilesOpen )
 	{
