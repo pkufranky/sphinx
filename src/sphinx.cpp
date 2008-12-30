@@ -17,6 +17,7 @@
 #include "sphinxutils.h"
 #include "sphinxexpr.h"
 #include "sphinxfilter.h"
+#include "sphinxint.h"
 
 #include <ctype.h>
 #include <fcntl.h>
@@ -862,58 +863,6 @@ public:
 
 	bool				IsEOF () const;
 	ESphBinRead			Precache ();
-};
-
-/////////////////////////////////////////////////////////////////////////////
-
-class CSphWriter : ISphNoncopyable
-{
-public:
-				CSphWriter ();
-				~CSphWriter ();
-
-	bool		OpenFile ( const char * sName, CSphString & sErrorBuffer );
-	void		SetFile ( int iFD, SphOffset_t * pSharedOffset = NULL, int iWriteCacheSize = SPH_CACHE_WRITE );
-	void		CloseFile (); ///< note: calls Flush(), ie. IsError() might get true after this call
-
-	void		PutByte ( int uValue );
-	void		PutBytes ( const void * pData, int iSize );
-	void		PutDword ( DWORD uValue ) { PutBytes ( &uValue, sizeof(DWORD) ); }
-	void		PutOffset ( SphOffset_t uValue ) { PutBytes ( &uValue, sizeof(SphOffset_t) ); }
-	void		PutString ( const char * szString );
-
-	void		SeekTo ( SphOffset_t pos );
-
-#if USE_64BIT
-	void		PutDocid ( SphDocID_t uValue ) { PutOffset ( uValue ); }
-#else
-	void		PutDocid ( SphDocID_t uValue ) { PutDword ( uValue ); }
-#endif
-
-	void		ZipInt ( DWORD uValue );
-	void		ZipOffset ( SphOffset_t uValue );
-	void		ZipOffsets ( CSphVector<SphOffset_t> * pData );
-
-	inline bool			IsError () const	{ return m_bError; }
-	inline SphOffset_t	GetPos () const		{ return m_iPos; }
-
-private:
-	CSphString		m_sName;
-	SphOffset_t		m_iPos;
-	SphOffset_t		m_iWritten;
-
-	int				m_iFD;
-	int				m_iPoolUsed;
-	BYTE *			m_pBuffer;
-	BYTE *			m_pPool;
-	bool			m_bOwnFile;
-	SphOffset_t	*	m_pSharedOffset;
-	int				m_iBufferSize;
-
-	bool			m_bError;
-	CSphString *	m_pError;
-
-	void		Flush ();
 };
 
 /////////////////////////////////////////////////////////////////////////////
