@@ -37,24 +37,37 @@ void main ()
 		sphDie ( "iterate-start failed: %s", sError.cstr() );
 
 	float tmStart = sphLongTimer ();
+	float tmAvgCommit = 0.0f;
+	float tmMaxCommit = 0.0f;
+	int iCommits = 0;
 	for ( ;; )
 	{
 		if ( !pSrc->IterateHitsNext ( sError ) )
 			sphDie ( "iterate-next failed: %s", sError.cstr() );
 
-		if ( !pSrc->m_tDocInfo.m_iDocID )
-			break;
+		if ( pSrc->m_tDocInfo.m_iDocID )
+			pIndex->AddDocument ( pSrc->m_dHits );
 
-		pIndex->AddDocument ( pSrc->m_dHits );
-		if (!( pSrc->GetStats().m_iTotalDocuments % COMMIT_STEP ))
+		if ( ( pSrc->GetStats().m_iTotalDocuments % COMMIT_STEP )==0 || !pSrc->m_tDocInfo.m_iDocID )
+		{
+			float tmCommit = sphLongTimer();
 			pIndex->Commit ();
+			tmCommit = sphLongTimer()-tmCommit;
+
+			iCommits++;
+			tmAvgCommit += tmCommit;
+			tmMaxCommit = Max ( tmMaxCommit, tmCommit );
+
+			if ( !pSrc->m_tDocInfo.m_iDocID )
+			{
+				tmAvgCommit /= iCommits;
+				break;
+			}
+		}
 
 		if (!( pSrc->GetStats().m_iTotalDocuments % 1000 ))
-		{
 			printf ( "%d docs\r", (int)pSrc->GetStats().m_iTotalDocuments );
-		}
 	}
-	pIndex->Commit ();
 
 	float tmEnd = sphLongTimer ();
 	float fTotalMB = (float)pSrc->GetStats().m_iTotalBytes/1000000.0f;
@@ -62,6 +75,7 @@ void main ()
 		COMMIT_STEP,
 		(int)pSrc->GetStats().m_iTotalDocuments,
 		(int)pSrc->GetStats().m_iTotalBytes, tmEnd-tmStart, fTotalMB/(tmEnd-tmStart) );
+	printf ( "commit-docs %d, avg %.2f msec, max %.2f msec\n", COMMIT_STEP, tmAvgCommit*1000, tmMaxCommit*1000 );
 
 	pIndex->DumpToDisk ( "dump" );
 
