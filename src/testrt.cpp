@@ -5,6 +5,12 @@
 #include "sphinx.h"
 #include "sphinxrt.h"
 
+#if USE_WINDOWS
+#include "psapi.h"
+#pragma comment(linker, "/defaultlib:psapi.lib")
+#pragma message("Automatically linking with psapi.lib")
+#endif
+
 void main ()
 {
 	int COMMIT_STEP = 1;
@@ -84,6 +90,14 @@ void main ()
 
 #if SPH_ALLOCS_PROFILER
 	sphAllocsStats();
+#endif
+#if USE_WINDOWS
+    PROCESS_MEMORY_COUNTERS pmc;
+	HANDLE hProcess = OpenProcess ( PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, GetCurrentProcessId() );
+	if ( hProcess && GetProcessMemoryInfo ( hProcess, &pmc, sizeof(pmc)) )
+	{
+		printf ( "--- peak-wss=%d, peak-pagefile=%d\n", (int)pmc.PeakWorkingSetSize, (int)pmc.PeakPagefileUsage  );
+	}
 #endif
 
 	SafeDelete ( pIndex );

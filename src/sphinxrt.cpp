@@ -39,9 +39,21 @@ struct RtWord_t
 
 struct RtSegment_t
 {
+#ifndef NDEBUG
+	int							m_iTag;
+	static int					m_iSegments;
+#endif
+
 	CSphVector<RtWord_t>		m_dWords;
 	CSphVector<RtDoc_t>			m_dDocs;
 	CSphVector<DWORD>			m_dHits;
+
+	RtSegment_t ()
+	{
+#ifndef NDEBUG
+		m_iTag = m_iSegments++;
+#endif
+	}
 
 	int GetSize() const
 	{
@@ -51,6 +63,10 @@ struct RtSegment_t
 			m_dHits.GetLength()*sizeof(m_dHits[0]);
 	}
 };
+
+#ifndef NDEBUG
+int RtSegment_t::m_iSegments = 0;
+#endif
 
 
 struct RtIndex_t : public ISphRtIndex
@@ -129,10 +145,8 @@ RtSegment_t * RtIndex_t::CreateSegment ()
 				tWord.m_uDocs++;
 				tWord.m_uHits += tDoc.m_uHits;
 
-// !COMMIT do this optimization
-//				if ( tDoc.m_uHits==1 )
-//					tDoc.m_uHit = pSeg->m_dHits.Pop();
-
+				if ( tDoc.m_uHits==1 )
+					tDoc.m_uHit = pSeg->m_dHits.Pop();
 
 				pSeg->m_dDocs.Add ( tDoc );
 				tDoc.m_uFields = 0;
@@ -170,21 +184,37 @@ void RtIndex_t::CopyWord ( RtSegment_t * pDst, const RtSegment_t * pSrc, const R
 {
 	assert ( pDst->m_dWords.GetLength()==0 || pWord->m_uWordID > pDst->m_dWords.Last().m_uWordID );
 
+	// append word to the dictionary
 	pDst->m_dWords.Add ( *pWord );
 	pDst->m_dWords.Last().m_uDoc = pDst->m_dDocs.GetLength();
+
+	// copy docs
+	DWORD uStartHit = 1;
+	DWORD uEndHit = 0;
 
 	DWORD uHit = pDst->m_dHits.GetLength();
 	for ( DWORD i=pWord->m_uDoc; i<pWord->m_uDoc+pWord->m_uDocs; i++ )
 	{
 		RtDoc_t & tDoc = pDst->m_dDocs.Add ();
 		tDoc = pSrc->m_dDocs[i];
-		tDoc.m_uHit = uHit;
-		uHit += tDoc.m_uHits;
+
+		if ( tDoc.m_uHits>1 )
+		{
+			if ( uStartHit>uEndHit )
+			{
+				uStartHit = tDoc.m_uHit;
+				assert ( (int)uStartHit < pSrc->m_dHits.GetLength() );
+			}
+
+			uEndHit = tDoc.m_uHit + tDoc.m_uHits;
+			assert ( (int)uEndHit <= pSrc->m_dHits.GetLength() );
+
+			tDoc.m_uHit = uHit;
+			uHit += tDoc.m_uHits;
+		}
 	}
 
-	const RtDoc_t & tLastDoc = pSrc->m_dDocs [ pWord->m_uDoc + pWord->m_uDocs - 1 ];
-	DWORD uStartHit = pSrc->m_dDocs [ pWord->m_uDoc ].m_uHit;
-	DWORD uEndHit = tLastDoc.m_uHit + tLastDoc.m_uHits;
+	// copy hits
 	for ( DWORD i=uStartHit; i<uEndHit; i++ )
 		pDst->m_dHits.Add ( pSrc->m_dHits[i] );
 }
@@ -197,10 +227,13 @@ void RtIndex_t::CopyDoc ( RtSegment_t * pSeg, RtWord_t * pWord, const RtSegment_
 
 	RtDoc_t & tDoc = pSeg->m_dDocs.Add ();
 	tDoc = *pDoc;
-	tDoc.m_uHit = pSeg->m_dHits.GetLength();
 
-	for ( DWORD i=pDoc->m_uHit; i<pDoc->m_uHit+pDoc->m_uHits; i++ )
-		pSeg->m_dHits.Add ( pSrc->m_dHits[i] );
+	if ( tDoc.m_uHits>1 )
+	{
+		tDoc.m_uHit = pSeg->m_dHits.GetLength();
+		for ( DWORD i=pDoc->m_uHit; i<pDoc->m_uHit+pDoc->m_uHits; i++ )
+			pSeg->m_dHits.Add ( pSrc->m_dHits[i] );
+	}
 }
 
 
@@ -387,7 +420,6 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 
 		for ( DWORD uDoc = tWord.m_uDoc; uDoc < tWord.m_uDoc + tWord.m_uDocs; uDoc++ )
 		{
-			DWORD uLastHit = 0;
 			const RtDoc_t & tDoc = pSeg->m_dDocs[uDoc];
 
 			wrDocs.ZipOffset ( tDoc.m_uDocID-uLastDoc );
@@ -397,10 +429,17 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 			uLastDoc = tDoc.m_uDocID;
 			uLastHitpos = wrHits.GetPos();
 
-			for ( DWORD uHit = tDoc.m_uHit; uHit < tDoc.m_uHit + tDoc.m_uHits; uHit++ )
+			if ( tDoc.m_uHits>1 )
 			{
-				wrHits.ZipInt ( pSeg->m_dHits[uHit] - uLastHit );
-				uLastHit = pSeg->m_dHits[uHit];
+				DWORD uLastHit = 0;
+				for ( DWORD uHit = tDoc.m_uHit; uHit < tDoc.m_uHit + tDoc.m_uHits; uHit++ )
+				{
+					wrHits.ZipInt ( pSeg->m_dHits[uHit] - uLastHit );
+					uLastHit = pSeg->m_dHits[uHit];
+				}
+			} else
+			{
+				wrHits.ZipInt ( tDoc.m_uHit );
 			}
 			wrHits.ZipInt ( 0 );
 		}
