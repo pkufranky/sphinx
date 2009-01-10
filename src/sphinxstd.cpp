@@ -247,6 +247,69 @@ void operator delete [] ( void * pPtr )
 }
 
 //////////////////////////////////////////////////////////////////////////////
+// ALLOCACTIONS COUNT/SIZE PROFILER
+//////////////////////////////////////////////////////////////////////////////
+
+#endif
+#if SPH_ALLOCS_PROFILER
+
+#undef new
+
+static int				g_iCurAllocs	= 0;
+static int				g_iCurBytes		= 0;
+static int				g_iTotalAllocs	= 0;
+static int				g_iPeakAllocs	= 0;
+static int				g_iPeakBytes	= 0;
+
+void * sphDebugNew ( size_t iSize )
+{
+	BYTE * pBlock = (BYTE*) ::malloc ( iSize+sizeof(size_t) );
+	if ( !pBlock )
+		sphDie ( "out of memory (unable to allocate %"PRIu64" bytes)", (uint64_t)iSize ); // FIXME! this may fail with malloc error too
+
+	g_iCurAllocs++;
+	g_iCurBytes += (int)iSize;
+	g_iTotalAllocs++;
+	g_iPeakAllocs = Max ( g_iCurAllocs, g_iPeakAllocs );
+	g_iPeakBytes = Max ( g_iCurBytes, g_iPeakBytes );
+
+	*(size_t*) pBlock = iSize;
+	return pBlock + sizeof(size_t);
+}
+
+void sphDebugDelete ( void * pPtr )
+{
+	if ( !pPtr )
+		return;
+
+	size_t * pBlock = (size_t*) pPtr;
+	pBlock--;
+
+	g_iCurAllocs--;
+	g_iCurBytes -= *pBlock;
+	g_iTotalAllocs--;
+
+	::free ( pBlock );
+}
+
+void sphAllocsStats ()
+{
+	fprintf ( stdout, "--- total-allocs=%d, peak-allocs=%d, peak-bytes=%d\n",
+		g_iTotalAllocs, g_iPeakAllocs, g_iPeakBytes );
+}
+
+int	sphAllocBytes ()			{ return g_iCurBytes; }
+int sphAllocsCount ()			{ return g_iCurAllocs; }
+int sphAllocsLastID ()			{ return -1; }
+void sphAllocsDump ( int, int )	{}
+void sphAllocsCheck ()			{}
+
+void * operator new ( size_t iSize, const char *, int )		{ return sphDebugNew ( iSize ); }
+void * operator new [] ( size_t iSize, const char *, int )	{ return sphDebugNew ( iSize ); }
+void operator delete ( void * pPtr )						{ sphDebugDelete ( pPtr ); }
+void operator delete [] ( void * pPtr )						{ sphDebugDelete ( pPtr ); }
+
+//////////////////////////////////////////////////////////////////////////////
 // PRODUCTION MEMORY MANAGER
 //////////////////////////////////////////////////////////////////////////////
 

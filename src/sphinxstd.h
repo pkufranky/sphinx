@@ -137,8 +137,9 @@ STATIC_SIZE_ASSERT ( int64_t, 8 );
 /////////////////////////////////////////////////////////////////////////////
 
 #define SPH_DEBUG_LEAKS			0
+#define SPH_ALLOCS_PROFILER		1
 
-#if SPH_DEBUG_LEAKS
+#if SPH_DEBUG_LEAKS || SPH_ALLOCS_PROFILER
 
 /// debug new that tracks memory leaks
 void *			operator new ( size_t iSize, const char * sFile, int iLine );
@@ -167,7 +168,7 @@ void			sphAllocsCheck ();
 #undef new
 #define new		new(__FILE__,__LINE__)
 
-#endif // SPH_DEBUG_LEAKS
+#endif // SPH_DEBUG_LEAKS || SPH_ALLOCS_PROFILER
 
 /// delete for my new
 void			operator delete ( void * pPtr );

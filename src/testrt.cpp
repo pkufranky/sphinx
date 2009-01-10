@@ -82,6 +82,10 @@ void main ()
 	tmEnd = sphLongTimer();
 	printf ( "total with dump %.2f sec, %.2f MB/sec\n", tmEnd-tmStart, fTotalMB/(tmEnd-tmStart) );
 
+#if SPH_ALLOCS_PROFILER
+	sphAllocsStats();
+#endif
+
 	SafeDelete ( pIndex );
 	SafeDelete ( pDict );
 	SafeDelete ( pTok );
