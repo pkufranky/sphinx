@@ -77,7 +77,7 @@ void main ()
 
 	float tmEnd = sphLongTimer ();
 	float fTotalMB = (float)pSrc->GetStats().m_iTotalBytes/1000000.0f;
-	printf ( "commit-step %d, %d docs, %d bytes, %.2f sec, %.2f MB/sec\n",
+	printf ( "commit-step %d, %d docs, %d bytes, %.3f sec, %.2f MB/sec\n",
 		COMMIT_STEP,
 		(int)pSrc->GetStats().m_iTotalDocuments,
 		(int)pSrc->GetStats().m_iTotalBytes, tmEnd-tmStart, fTotalMB/(tmEnd-tmStart) );
