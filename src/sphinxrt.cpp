@@ -8,8 +8,42 @@
 
 //////////////////////////////////////////////////////////////////////////
 
-const DWORD WORDID_MAX = 0xffffffffUL; // !COMMIT might be qword
+#define	COMPRESSED_DOCLIST	1
+#define WORDID_MAX			0xffffffffUL; // !COMMIT might be qword
 
+//////////////////////////////////////////////////////////////////////////
+
+static inline void ZipDword ( CSphVector<BYTE> & dOut, DWORD uValue )
+{
+	do 
+	{
+		BYTE bOut = BYTE( uValue & 0x7f );
+		uValue >>= 7;
+		if ( uValue )
+			bOut |= 0x80;
+		dOut.Add ( bOut );
+	} while ( uValue );
+}
+
+
+static inline const BYTE * UnzipDword ( DWORD * pValue, const BYTE * pIn )
+{
+	DWORD uValue = 0;
+	BYTE bIn;
+	int iOff = 0;
+
+	do 
+	{
+		bIn = *pIn++;
+		uValue += ( bIn & 0x7f )<<iOff;
+		iOff += 7;
+	} while ( bIn & 0x80 );
+
+	*pValue = uValue;
+	return pIn;
+}
+
+//////////////////////////////////////////////////////////////////////////
 
 struct CmpHit_fn
 {
@@ -48,7 +82,11 @@ struct RtSegment_t
 #endif
 
 	CSphVector<RtWord_t>		m_dWords;
+#if COMPRESSED_DOCLIST
+	CSphVector<BYTE>			m_dDocs;
+#else
 	CSphVector<RtDoc_t>			m_dDocs;
+#endif
 	CSphVector<DWORD>			m_dHits;
 
 	RtSegment_t ()
@@ -72,10 +110,25 @@ struct RtSegment_t
 	}
 
 public:
+#if COMPRESSED_DOCLIST
+	void ZipDoc ( const RtDoc_t & tDoc )
+	{
+		ZipDword ( m_dDocs, tDoc.m_uDocID ); // !COMMIT might be qword
+		ZipDword ( m_dDocs, tDoc.m_uFields );
+		ZipDword ( m_dDocs, tDoc.m_uHits );
+		if ( tDoc.m_uHits==1 )
+		{
+			ZipDword ( m_dDocs, tDoc.m_uHit & 0xffffffUL );
+			ZipDword ( m_dDocs, tDoc.m_uHit>>24 );
+		} else
+			ZipDword ( m_dDocs, tDoc.m_uHit );
+	}
+#else
 	void ZipDoc ( const RtDoc_t & tDoc )
 	{
 		m_dDocs.Add ( tDoc );
 	}
+#endif
 
 	DWORD ZipDocPtr () const
 	{
@@ -83,6 +136,46 @@ public:
 	}
 };
 
+
+#if COMPRESSED_DOCLIST
+
+struct RtDocIterator_t
+{
+	const BYTE *	m_pDocs;
+	int				m_iLeft;
+	RtDoc_t			m_tDoc;
+
+	explicit RtDocIterator_t ( const RtSegment_t * pSeg, const RtWord_t & tWord )
+	{
+		m_pDocs = &pSeg->m_dDocs[0] + tWord.m_uDoc;
+		m_iLeft = tWord.m_uDocs;
+	}
+
+	const RtDoc_t * UnzipDoc ()
+	{
+		if ( !m_iLeft )
+			return NULL;
+
+		const BYTE * pIn = m_pDocs;
+		pIn = UnzipDword ( &m_tDoc.m_uDocID, pIn ); // !COMMIT might be qword
+		pIn = UnzipDword ( &m_tDoc.m_uFields, pIn );
+		pIn = UnzipDword ( &m_tDoc.m_uHits, pIn );
+		if ( m_tDoc.m_uHits==1 )
+		{
+			DWORD a, b;
+			pIn = UnzipDword ( &a, pIn );
+			pIn = UnzipDword ( &b, pIn );
+			m_tDoc.m_uHit = a + ( b<<24 );
+		} else
+			pIn = UnzipDword ( &m_tDoc.m_uHit, pIn );
+		m_pDocs = pIn;
+
+		m_iLeft--;
+		return &m_tDoc;
+	}
+};
+
+#else
 
 struct RtDocIterator_t
 {
@@ -102,6 +195,8 @@ struct RtDocIterator_t
 		return m_iPos<m_iMax ? m_pDocs + m_iPos++ : NULL;
 	}
 };
+
+#endif // COMPRESSED_DOCLIST
 
 
 #ifndef NDEBUG
