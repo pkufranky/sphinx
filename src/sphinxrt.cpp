@@ -8,8 +8,9 @@
 
 //////////////////////////////////////////////////////////////////////////
 
-#define	COMPRESSED_DOCLIST	1
-#define WORDID_MAX			0xffffffffUL; // !COMMIT might be qword
+#define	COMPRESSED_DOCLIST		1
+#define	COMPRESSED_WORDLIST		1
+#define	WORDID_MAX				0xffffffffUL; // !COMMIT might be qword
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -81,7 +82,12 @@ struct RtSegment_t
 	static int					m_iSegments;
 #endif
 
+#if COMPRESSED_WORDLIST
+	CSphVector<BYTE>			m_dWords;
+#else
 	CSphVector<RtWord_t>		m_dWords;
+#endif
+
 #if COMPRESSED_DOCLIST
 	CSphVector<BYTE>			m_dDocs;
 #else
@@ -136,16 +142,6 @@ public:
 	DWORD ZipDocPtr () const
 	{
 		return m_dDocs.GetLength();
-	}
-
-	void ZipWord ( const RtWord_t & tWord )
-	{
-		m_dWords.Add ( tWord );
-	}
-
-	DWORD ZipWordPtr () const
-	{
-		return m_dWords.GetLength();
 	}
 };
 
@@ -212,12 +208,84 @@ struct RtDocIterator_t
 #endif // COMPRESSED_DOCLIST
 
 
-struct RtWordIterator_t
+#if COMPRESSED_WORDLIST
+
+struct RtWordWriter_t
+{
+	CSphVector<BYTE> *	m_pWords;
+	SphWordID_t			m_uLastWordID;
+	DWORD				m_uLastDoc;
+
+	explicit RtWordWriter_t ( RtSegment_t * pSeg )
+		: m_pWords ( &pSeg->m_dWords )
+		, m_uLastWordID ( 0 )
+		, m_uLastDoc ( 0 )
+	{}
+
+	void ZipWord ( const RtWord_t & tWord )
+	{
+		CSphVector<BYTE> & tWords = *m_pWords;
+		ZipDword ( tWords, tWord.m_uWordID - m_uLastWordID ); // !COMMIT might be qword
+		ZipDword ( tWords, tWord.m_uDocs );
+		ZipDword ( tWords, tWord.m_uHits );
+		ZipDword ( tWords, tWord.m_uDoc - m_uLastDoc );
+		m_uLastWordID = tWord.m_uWordID;
+		m_uLastDoc = tWord.m_uDoc;
+	}
+};
+
+
+struct RtWordReader_t
+{
+	const BYTE *	m_pCur;
+	const BYTE *	m_pMax;
+	RtWord_t		m_tWord;	
+
+	explicit RtWordReader_t ( const RtSegment_t * pSeg )
+	{
+		m_pCur = &pSeg->m_dWords[0];
+		m_pMax = m_pCur + pSeg->m_dWords.GetLength();
+
+		m_tWord.m_uWordID = 0;
+		m_tWord.m_uDoc = 0;
+	}
+
+	const RtWord_t * UnzipWord ()
+	{
+		if ( m_pCur>=m_pMax )
+			return NULL;
+
+		const BYTE * pIn = m_pCur;
+		DWORD uDeltaID, uDeltaDoc;
+		pIn = UnzipDword ( &uDeltaID, pIn ); // !COMMIT might be qword
+		pIn = UnzipDword ( &m_tWord.m_uDocs, pIn );
+		pIn = UnzipDword ( &m_tWord.m_uHits, pIn );
+		pIn = UnzipDword ( &uDeltaDoc, pIn );
+		m_pCur = pIn;
+
+		m_tWord.m_uWordID += uDeltaID;
+		m_tWord.m_uDoc += uDeltaDoc;
+		return &m_tWord;
+	}
+};
+
+#else
+
+struct RtWordWriter_t
+{
+	CSphVector<RtWord_t> *	m_pWords;
+
+	explicit				RtWordWriter_t ( RtSegment_t * pSeg )	: m_pWords ( &pSeg->m_dWords ) {}
+	void					ZipWord ( const RtWord_t & tWord )		{ m_pWords->Add ( tWord ); }
+};
+
+
+struct RtWordReader_t
 {
 	const RtWord_t *	m_pCur;
 	const RtWord_t *	m_pMax;
 
-	explicit RtWordIterator_t ( const RtSegment_t * pSeg )
+	explicit RtWordReader_t ( const RtSegment_t * pSeg )
 	{
 		m_pCur = &pSeg->m_dWords[0];
 		m_pMax = m_pCur + pSeg->m_dWords.GetLength();
@@ -228,6 +296,8 @@ struct RtWordIterator_t
 		return m_pCur<m_pMax ? m_pCur++ : NULL;
 	}
 };
+
+#endif // COMPRESSED_WORDLIST
 
 
 #ifndef NDEBUG
@@ -249,8 +319,8 @@ struct RtIndex_t : public ISphRtIndex
 
 	RtSegment_t *				CreateSegment ();
 	RtSegment_t *				MergeSegments ( const RtSegment_t * pSeg1, const RtSegment_t * pSeg2 );
-	const RtWord_t *			CopyWord ( RtSegment_t * pDst, const RtSegment_t * pSrc, const RtWord_t * pWord, RtWordIterator_t & tIt );
-	void						MergeWord ( RtSegment_t * pDst, const RtSegment_t * pSrc1, const RtWord_t * pWord1, const RtSegment_t * pSrc2, const RtWord_t * pWord2 );
+	const RtWord_t *			CopyWord ( RtSegment_t * pDst, const RtSegment_t * pSrc, const RtWord_t * pWord, RtWordWriter_t & tOut, RtWordReader_t & tIn );
+	void						MergeWord ( RtSegment_t * pDst, const RtSegment_t * pSrc1, const RtWord_t * pWord1, const RtSegment_t * pSrc2, const RtWord_t * pWord2, RtWordWriter_t & tOut );
 	void						CopyDoc ( RtSegment_t * pSeg, RtWord_t * pWord, const RtSegment_t * pSrc, const RtDoc_t * pDoc );
 
 	void						DumpToDisk ( const char * sFilename );
@@ -302,6 +372,7 @@ RtSegment_t * RtIndex_t::CreateSegment ()
 	tWord.m_uHits = 0;
 	tWord.m_uDoc = 0;
 
+	RtWordWriter_t tOut ( pSeg );
 	ARRAY_FOREACH ( i, m_dAccum )
 	{
 		const CSphWordHit & tHit = m_dAccum[i];
@@ -329,7 +400,7 @@ RtSegment_t * RtIndex_t::CreateSegment ()
 		if ( tHit.m_iWordID!=tWord.m_uWordID )
 		{
 			if ( tWord.m_uWordID )
-				pSeg->ZipWord (  tWord );
+				tOut.ZipWord (  tWord );
 
 			tWord.m_uWordID = tHit.m_iWordID;
 			tWord.m_uDocs = 0;
@@ -350,14 +421,12 @@ RtSegment_t * RtIndex_t::CreateSegment ()
 }
 
 
-const RtWord_t * RtIndex_t::CopyWord ( RtSegment_t * pDst, const RtSegment_t * pSrc, const RtWord_t * pWord, RtWordIterator_t & tIt )
+const RtWord_t * RtIndex_t::CopyWord ( RtSegment_t * pDst, const RtSegment_t * pSrc, const RtWord_t * pWord, RtWordWriter_t & tOut, RtWordReader_t & tIn )
 {
-	assert ( pDst->m_dWords.GetLength()==0 || pWord->m_uWordID > pDst->m_dWords.Last().m_uWordID );
-
 	// append word to the dictionary
-	RtWord_t tOut = *pWord;
-	tOut.m_uDoc = pDst->ZipDocPtr();
-	pDst->ZipWord ( tOut );
+	RtWord_t tNewWord = *pWord;
+	tNewWord.m_uDoc = pDst->ZipDocPtr();
+	tOut.ZipWord ( tNewWord );
 
 	// copy docs
 	DWORD uStartHit = 1;
@@ -395,7 +464,7 @@ const RtWord_t * RtIndex_t::CopyWord ( RtSegment_t * pDst, const RtSegment_t * p
 		pDst->m_dHits.Add ( pSrc->m_dHits[i] );
 
 	// move forward
-	return tIt.UnzipWord ();
+	return tIn.UnzipWord ();
 }
 
 
@@ -417,10 +486,9 @@ void RtIndex_t::CopyDoc ( RtSegment_t * pSeg, RtWord_t * pWord, const RtSegment_
 }
 
 
-void RtIndex_t::MergeWord ( RtSegment_t * pSeg, const RtSegment_t * pSrc1, const RtWord_t * pWord1, const RtSegment_t * pSrc2, const RtWord_t * pWord2 )
+void RtIndex_t::MergeWord ( RtSegment_t * pSeg, const RtSegment_t * pSrc1, const RtWord_t * pWord1, const RtSegment_t * pSrc2, const RtWord_t * pWord2, RtWordWriter_t & tOut )
 {
 	assert ( pWord1->m_uWordID==pWord2->m_uWordID );
-	assert ( pSeg->m_dWords.GetLength()==0 || pWord1->m_uWordID > pSeg->m_dWords.Last().m_uWordID );
 
 	RtWord_t tWord;
 	tWord.m_uWordID = pWord1->m_uWordID;
@@ -470,7 +538,7 @@ void RtIndex_t::MergeWord ( RtSegment_t * pSeg, const RtSegment_t * pSrc1, const
 		pDoc2 = tIn2.UnzipDoc();
 	}
 
-	pSeg->ZipWord ( tWord );
+	tOut.ZipWord ( tWord );
 }
 
 
@@ -479,9 +547,9 @@ RtSegment_t * RtIndex_t::MergeSegments ( const RtSegment_t * pSeg1, const RtSegm
 	RtSegment_t * pSeg = new RtSegment_t ();
 	pSeg->m_iDocs = pSeg1->m_iDocs + pSeg2->m_iDocs; // !COMMIT incorrect because of dupes
 
-
-	RtWordIterator_t tIn1 ( pSeg1 );
-	RtWordIterator_t tIn2 ( pSeg2 );
+	RtWordWriter_t tOut ( pSeg );
+	RtWordReader_t tIn1 ( pSeg1 );
+	RtWordReader_t tIn2 ( pSeg2 );
 	const RtWord_t * pWords1 = tIn1.UnzipWord ();
 	const RtWord_t * pWords2 = tIn2.UnzipWord ();
 
@@ -490,22 +558,22 @@ RtSegment_t * RtIndex_t::MergeSegments ( const RtSegment_t * pSeg1, const RtSegm
 	{
 		while ( pWords1 && pWords2 && pWords1->m_uWordID!=pWords2->m_uWordID )
 			if ( pWords1->m_uWordID < pWords2->m_uWordID )
-				pWords1 = CopyWord ( pSeg, pSeg1, pWords1, tIn1 );
+				pWords1 = CopyWord ( pSeg, pSeg1, pWords1, tOut, tIn1 );
 			else
-				pWords2 = CopyWord ( pSeg, pSeg2, pWords2, tIn2 );
+				pWords2 = CopyWord ( pSeg, pSeg2, pWords2, tOut, tIn2 );
 
 		if ( !pWords1 || !pWords2 )
 			break;
 
 		assert ( pWords1 && pWords2 && pWords1->m_uWordID==pWords2->m_uWordID );
-		MergeWord ( pSeg, pSeg1, pWords1, pSeg2, pWords2 );
+		MergeWord ( pSeg, pSeg1, pWords1, pSeg2, pWords2, tOut );
 		pWords1 = tIn1.UnzipWord();
 		pWords2 = tIn2.UnzipWord();
 	}
 
 	// copy tails
-	while ( pWords1 ) pWords1 = CopyWord ( pSeg, pSeg1, pWords1, tIn1 );
-	while ( pWords2 ) pWords2 = CopyWord ( pSeg, pSeg2, pWords2, tIn2 );
+	while ( pWords1 ) pWords1 = CopyWord ( pSeg, pSeg1, pWords1, tOut, tIn1 );
+	while ( pWords2 ) pWords2 = CopyWord ( pSeg, pSeg2, pWords2, tOut, tIn2 );
 	return pSeg;
 }
 
@@ -598,10 +666,10 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 	};
 	CSphVector<Checkpoint_t> dCheckpoints;
 
-	RtWordIterator_t tWordIt ( pSeg );
+	RtWordReader_t tIn ( pSeg );
 	for ( ;; )
 	{
-		const RtWord_t * pWord = tWordIt.UnzipWord();
+		const RtWord_t * pWord = tIn.UnzipWord();
 		if ( !pWord )
 			break;
 
