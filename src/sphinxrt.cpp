@@ -89,11 +89,14 @@ struct RtSegment_t
 #endif
 	CSphVector<DWORD>			m_dHits;
 
+	int							m_iDocs;
+
 	RtSegment_t ()
 	{
 #ifndef NDEBUG
 		m_iTag = m_iSegments++;
 #endif
+		m_iDocs = 0;
 	}
 
 	int GetSizeBytes () const
@@ -106,7 +109,7 @@ struct RtSegment_t
 
 	int GetMergeFactor () const
 	{
-		return GetSizeBytes();
+		return m_iDocs;
 	}
 
 public:
@@ -208,6 +211,7 @@ struct RtIndex_t : public ISphRtIndex
 {
 	CSphVector<CSphWordHit>		m_dAccum;
 	CSphVector<RtSegment_t*>	m_pSegments;
+	int							m_iAccumDocs;
 
 	explicit					RtIndex_t ();
 	virtual						~RtIndex_t ();
@@ -228,6 +232,7 @@ struct RtIndex_t : public ISphRtIndex
 RtIndex_t::RtIndex_t ()
 {
 	m_dAccum.Reserve ( 2*1024*1024 );
+	m_iAccumDocs = 0;
 }
 
 
@@ -242,6 +247,7 @@ void RtIndex_t::AddDocument ( const CSphVector<CSphWordHit> & dHits )
 {
 	ARRAY_FOREACH ( i, dHits )
 		m_dAccum.Add ( dHits[i] );
+	m_iAccumDocs++;
 }
 
 
@@ -310,7 +316,8 @@ RtSegment_t * RtIndex_t::CreateSegment ()
 	}
 
 	m_dAccum.Resize ( 0 );
-
+	pSeg->m_iDocs = m_iAccumDocs;
+	m_iAccumDocs = 0;
 	return pSeg;
 }
 
@@ -436,6 +443,7 @@ void RtIndex_t::MergeWord ( RtSegment_t * pSeg, const RtSegment_t * pSrc1, const
 RtSegment_t * RtIndex_t::MergeSegments ( const RtSegment_t * pSeg1, const RtSegment_t * pSeg2 )
 {
 	RtSegment_t * pSeg = new RtSegment_t ();
+	pSeg->m_iDocs = pSeg1->m_iDocs + pSeg2->m_iDocs; // !COMMIT incorrect because of dupes
 
 	const RtWord_t * pWords1 = &pSeg1->m_dWords[0];
 	const RtWord_t * pWords2 = &pSeg2->m_dWords[0];
