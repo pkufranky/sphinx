@@ -8,8 +8,9 @@
 
 //////////////////////////////////////////////////////////////////////////
 
-#define	COMPRESSED_DOCLIST		1
 #define	COMPRESSED_WORDLIST		0
+#define	COMPRESSED_DOCLIST		1
+#define COMPRESSED_HITLIST		1
 #define	WORDID_MAX				0xffffffffUL; // !COMMIT might be qword
 
 //////////////////////////////////////////////////////////////////////////
@@ -93,7 +94,12 @@ struct RtSegment_t
 #else
 	CSphVector<RtDoc_t>			m_dDocs;
 #endif
+
+#if COMPRESSED_HITLIST
+	CSphVector<BYTE>			m_dHits;
+#else
 	CSphVector<DWORD>			m_dHits;
+#endif
 
 	int							m_iDocs;
 
@@ -118,6 +124,9 @@ struct RtSegment_t
 		return m_iDocs;
 	}
 };
+#ifndef NDEBUG
+int RtSegment_t::m_iSegments = 0;
+#endif
 
 
 #if COMPRESSED_DOCLIST
@@ -324,10 +333,92 @@ struct RtWordReader_t
 #endif // COMPRESSED_WORDLIST
 
 
-#ifndef NDEBUG
-int RtSegment_t::m_iSegments = 0;
-#endif
+#if COMPRESSED_HITLIST
 
+struct RtHitWriter_t
+{
+	CSphVector<BYTE> *	m_pHits;
+	DWORD				m_uLastHit;
+
+	explicit RtHitWriter_t ( RtSegment_t * pSeg )
+		: m_pHits ( &pSeg->m_dHits )
+		, m_uLastHit ( 0 )
+	{}
+
+	void ZipHit ( DWORD uValue )
+	{
+		ZipDword ( *m_pHits, uValue - m_uLastHit );
+		m_uLastHit = uValue;
+	}
+
+	void ZipRestart ()
+	{
+		m_uLastHit = 0;
+	}
+
+	DWORD ZipHitPtr () const
+	{
+		return m_pHits->GetLength();
+	}
+};
+
+
+struct RtHitReader_t
+{
+	const BYTE *	m_pCur;
+	DWORD			m_iLeft;
+	DWORD			m_uLast;
+
+	explicit RtHitReader_t ( const RtSegment_t * pSeg, const RtDoc_t * pDoc )
+	{
+		m_pCur = &pSeg->m_dHits [ pDoc->m_uHit ];
+		m_iLeft = pDoc->m_uHits;
+		m_uLast = 0;
+	}
+
+	DWORD UnzipHit ()
+	{
+		if ( !m_iLeft )
+			return 0;
+
+		DWORD uValue;
+		m_pCur = UnzipDword ( &uValue, m_pCur );
+		m_uLast += uValue;
+		m_iLeft--;
+		return m_uLast;
+	}
+};
+
+#else
+
+struct RtHitWriter_t
+{
+	CSphVector<DWORD> *	m_pHits;
+
+	explicit			RtHitWriter_t ( RtSegment_t * pSeg )	: m_pHits ( &pSeg->m_dHits ) {}
+	void				ZipHit ( DWORD uValue )					{ m_pHits->Add ( uValue ); }
+	void				ZipRestart ()							{}
+	DWORD				ZipHitPtr () const						{ return m_pHits->GetLength(); }
+};
+
+struct RtHitReader_t
+{
+	const DWORD * m_pCur;
+	const DWORD * m_pMax;
+
+	explicit RtHitReader_t ( const RtSegment_t * pSeg, const RtDoc_t * pDoc )
+	{
+		m_pCur = &pSeg->m_dHits [ pDoc->m_uHit ];
+		m_pMax = m_pCur + pDoc->m_uHits;
+	}
+
+	DWORD UnzipHit ()
+	{
+		return m_pCur<m_pMax ? *m_pCur++ : 0;
+	}
+};
+
+#endif // COMPRESSED_HITLIST
 
 struct RtIndex_t : public ISphRtIndex
 {
@@ -398,6 +489,9 @@ RtSegment_t * RtIndex_t::CreateSegment ()
 
 	RtDocWriter_t tOutDoc ( pSeg );
 	RtWordWriter_t tOutWord ( pSeg );
+	RtHitWriter_t tOutHit ( pSeg );
+
+	DWORD uEmbeddedHit = 0;
 	ARRAY_FOREACH ( i, m_dAccum )
 	{
 		const CSphWordHit & tHit = m_dAccum[i];
@@ -410,15 +504,21 @@ RtSegment_t * RtIndex_t::CreateSegment ()
 				tWord.m_uDocs++;
 				tWord.m_uHits += tDoc.m_uHits;
 
-				if ( tDoc.m_uHits==1 )
-					tDoc.m_uHit = pSeg->m_dHits.Pop();
+				if ( uEmbeddedHit )
+				{
+					assert ( tDoc.m_uHits==1 );
+					tDoc.m_uHit = uEmbeddedHit;
+				}
 
 				tOutDoc.ZipDoc ( tDoc );
 				tDoc.m_uFields = 0;
 				tDoc.m_uHits = 0;
-				tDoc.m_uHit = pSeg->m_dHits.GetLength();
+				tDoc.m_uHit = tOutHit.ZipHitPtr();
 			}
+
 			tDoc.m_uDocID = tHit.m_iDocID;
+			tOutHit.ZipRestart ();
+			uEmbeddedHit = 0;
 		}
 
 		// new keyword; flush current keyword
@@ -435,7 +535,20 @@ RtSegment_t * RtIndex_t::CreateSegment ()
 		}
 
 		// just a new hit
-		pSeg->m_dHits.Add ( tHit.m_iWordPos );
+		if ( !tDoc.m_uHits )
+		{
+			uEmbeddedHit = tHit.m_iWordPos;
+		} else
+		{
+			if ( uEmbeddedHit )
+			{
+				tOutHit.ZipHit ( uEmbeddedHit );
+				uEmbeddedHit = 0;
+			}
+
+			tOutHit.ZipHit ( tHit.m_iWordPos );
+		}
+
 		tDoc.m_uFields |= 1UL << ( tHit.m_iWordPos>>24 ); // !COMMIT HIT2LCS()
 		tDoc.m_uHits++;
 	}
@@ -449,7 +562,7 @@ RtSegment_t * RtIndex_t::CreateSegment ()
 
 const RtWord_t * RtIndex_t::CopyWord ( RtSegment_t * pDst, RtWordWriter_t & tOutWord, const RtSegment_t * pSrc, const RtWord_t * pWord, RtWordReader_t & tInWord )
 {
-	RtDocReader_t tDocIt ( pSrc, *pWord );
+	RtDocReader_t tInDoc ( pSrc, *pWord );
 	RtDocWriter_t tOutDoc ( pDst );
 
 	// append word to the dictionary
@@ -458,38 +571,33 @@ const RtWord_t * RtIndex_t::CopyWord ( RtSegment_t * pDst, RtWordWriter_t & tOut
 	tOutWord.ZipWord ( tNewWord );
 
 	// copy docs
-	DWORD uStartHit = 1;
-	DWORD uEndHit = 0;
-	DWORD uHit = pDst->m_dHits.GetLength();
-
 	for ( ;; )
 	{
-		const RtDoc_t * pDoc = tDocIt.UnzipDoc();
+		const RtDoc_t * pDoc = tInDoc.UnzipDoc();
 		if ( !pDoc )
 			break;
 
-		RtDoc_t tDoc = *pDoc;
-		if ( tDoc.m_uHits>1 )
+		// short route, single embedded hit
+		if ( pDoc->m_uHits==1 )
 		{
-			if ( uStartHit>uEndHit )
-			{
-				uStartHit = tDoc.m_uHit;
-				assert ( (int)uStartHit < pSrc->m_dHits.GetLength() );
-			}
-
-			uEndHit = tDoc.m_uHit + tDoc.m_uHits;
-			assert ( (int)uEndHit <= pSrc->m_dHits.GetLength() );
-
-			tDoc.m_uHit = uHit;
-			uHit += tDoc.m_uHits;
+			tOutDoc.ZipDoc ( *pDoc );
+			continue;
 		}
 
+		// long route, copy hits
+		RtHitWriter_t tOutHit ( pDst );
+		RtHitReader_t tInHit ( pSrc, pDoc );
+
+		RtDoc_t tDoc = *pDoc;
+		tDoc.m_uHit = tOutHit.ZipHitPtr();
+
+		// OPTIMIZE? decode+memcpy?
+		for ( DWORD uValue=tInHit.UnzipHit(); uValue; uValue=tInHit.UnzipHit() )
+			tOutHit.ZipHit ( uValue );
+
+		// copy doc
 		tOutDoc.ZipDoc ( tDoc );
 	}
-
-	// copy hits
-	for ( DWORD i=uStartHit; i<uEndHit; i++ )
-		pDst->m_dHits.Add ( pSrc->m_dHits[i] );
 
 	// move forward
 	return tInWord.UnzipWord ();
@@ -501,16 +609,22 @@ void RtIndex_t::CopyDoc ( RtSegment_t * pSeg, RtDocWriter_t & tOutDoc, RtWord_t 
 	pWord->m_uDocs++;
 	pWord->m_uHits += pDoc->m_uHits;
 
-	RtDoc_t tDoc = *pDoc;
-
-	if ( tDoc.m_uHits>1 )
+	if ( pDoc->m_uHits==1 )
 	{
-		tDoc.m_uHit = pSeg->m_dHits.GetLength();
-		for ( DWORD i=pDoc->m_uHit; i<pDoc->m_uHit+pDoc->m_uHits; i++ )
-			pSeg->m_dHits.Add ( pSrc->m_dHits[i] );
+		tOutDoc.ZipDoc ( *pDoc );
+		return;
 	}
 
+	RtHitWriter_t tOutHit ( pSeg );
+	RtHitReader_t tInHit ( pSrc, pDoc );
+
+	RtDoc_t tDoc = *pDoc;
+	tDoc.m_uHit = tOutHit.ZipHitPtr();
 	tOutDoc.ZipDoc ( tDoc );
+
+	// OPTIMIZE? decode+memcpy?
+	for ( DWORD uValue=tInHit.UnzipHit(); uValue; uValue=tInHit.UnzipHit() )
+		tOutHit.ZipHit ( uValue );
 }
 
 
@@ -576,6 +690,10 @@ RtSegment_t * RtIndex_t::MergeSegments ( const RtSegment_t * pSeg1, const RtSegm
 {
 	RtSegment_t * pSeg = new RtSegment_t ();
 	pSeg->m_iDocs = pSeg1->m_iDocs + pSeg2->m_iDocs; // !COMMIT incorrect because of dupes
+
+	pSeg->m_dWords.Reserve ( pSeg1->m_dWords.GetLength() + pSeg2->m_dWords.GetLength() );
+	pSeg->m_dDocs.Reserve ( pSeg1->m_dDocs.GetLength() + pSeg2->m_dDocs.GetLength() );
+	pSeg->m_dHits.Reserve ( pSeg1->m_dHits.GetLength() + pSeg2->m_dHits.GetLength() );
 
 	RtWordWriter_t tOut ( pSeg );
 	RtWordReader_t tIn1 ( pSeg1 );
@@ -738,10 +856,12 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 			if ( pDoc->m_uHits>1 )
 			{
 				DWORD uLastHit = 0;
-				for ( DWORD uHit = pDoc->m_uHit; uHit < pDoc->m_uHit + pDoc->m_uHits; uHit++ )
+
+				RtHitReader_t tInHit ( pSeg, pDoc );
+				for ( DWORD uValue=tInHit.UnzipHit(); uValue; uValue=tInHit.UnzipHit() )
 				{
-					wrHits.ZipInt ( pSeg->m_dHits[uHit] - uLastHit );
-					uLastHit = pSeg->m_dHits[uHit];
+					wrHits.ZipInt ( uValue - uLastHit );
+					uLastHit = uValue;
 				}
 			} else
 			{

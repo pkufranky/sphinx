@@ -20,7 +20,7 @@ void main ()
 	tParams.m_sUser = "root";
 	tParams.m_sDB = "lj";
 	tParams.m_dQueryPre.Add ( "SET NAMES utf8" );
-	tParams.m_sQuery = "SELECT id, title, UNCOMPRESS(content) content FROM posting WHERE id<=10000";
+	tParams.m_sQuery = "SELECT id, title, UNCOMPRESS(content) content FROM posting WHERE id<=100000";
 
 	CSphSource_MySQL * pSrc ( new CSphSource_MySQL ( "test" ) );
 	if ( !pSrc->Setup ( tParams ) )
@@ -83,7 +83,9 @@ void main ()
 		(int)pSrc->GetStats().m_iTotalBytes, tmEnd-tmStart, fTotalMB/(tmEnd-tmStart) );
 	printf ( "commit-docs %d, avg %.2f msec, max %.2f msec\n", COMMIT_STEP, tmAvgCommit*1000, tmMaxCommit*1000 );
 
+	printf ( "pre-dump allocs=%d, bytes=%d\n", sphAllocsCount(), sphAllocBytes() );
 	pIndex->DumpToDisk ( "dump" );
+	printf ( "post-dump allocs=%d, bytes=%d\n", sphAllocsCount(), sphAllocBytes() );
 
 	tmEnd = sphLongTimer();
 	printf ( "total with dump %.2f sec, %.2f MB/sec\n", tmEnd-tmStart, fTotalMB/(tmEnd-tmStart) );
