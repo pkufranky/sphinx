@@ -11,7 +11,26 @@
 #define	COMPRESSED_WORDLIST		0
 #define	COMPRESSED_DOCLIST		1
 #define COMPRESSED_HITLIST		1
-#define	WORDID_MAX				0xffffffffUL; // !COMMIT might be qword
+
+#if USE_64BIT
+#define WORDID_MAX				U64C(0xffffffffffffffff)
+#else
+#define	WORDID_MAX				0xffffffffUL
+#endif
+
+/////////////////////////////////////////////////////////////////////////////
+
+// !COMMIT replace with actual scoped locks impl later
+#define RLOCK(_arg) ;
+#define WLOCK(_arg) ;
+
+// !COMMIT cleanup extern ref to sphinx.cpp
+extern void sphSortDocinfos ( DWORD * pBuf, int iCount, int iStride );
+
+// !COMMIT yes i am when debugging
+#ifndef NDEBUG
+#define PARANOID 1
+#endif
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -78,10 +97,9 @@ struct RtWord_t
 
 struct RtSegment_t
 {
-#ifndef NDEBUG
-	int							m_iTag;
-	static int					m_iSegments;
-#endif
+public:
+	static int					m_iSegments;	///< age tag sequence generator
+	int							m_iTag;			///< segment age tag
 
 #if COMPRESSED_WORDLIST
 	CSphVector<BYTE>			m_dWords;
@@ -103,11 +121,12 @@ struct RtSegment_t
 
 	int							m_iDocs;
 
+	CSphVector<CSphRowitem>		m_dRows;
+
 	RtSegment_t ()
 	{
-#ifndef NDEBUG
+		WLOCK ( m_iSegments );
 		m_iTag = m_iSegments++;
-#endif
 		m_iDocs = 0;
 	}
 
@@ -123,11 +142,41 @@ struct RtSegment_t
 	{
 		return m_iDocs;
 	}
-};
-#ifndef NDEBUG
-int RtSegment_t::m_iSegments = 0;
-#endif
 
+	bool HasDocid ( SphDocID_t uDocid ) const;
+};
+
+int RtSegment_t::m_iSegments = 0;
+
+bool RtSegment_t::HasDocid ( SphDocID_t uDocid ) const
+{
+	// binary search through the rows
+	int iStride = m_dRows.GetLength() / m_iDocs;
+	SphDocID_t uL = DOCINFO2ID(&m_dRows[0]);
+	SphDocID_t uR = DOCINFO2ID(&m_dRows[m_dRows.GetLength()-iStride]);
+	if ( uDocid==uL || uDocid==uR )
+		return true;
+	if ( uDocid<uL || uDocid>uR )
+		return false;
+
+	int iL = 0;
+	int iR = m_iDocs-1;
+	while ( iR-iL>1 )
+	{
+		int iM = iL + (iR-iL)/2;
+		SphDocID_t uM = DOCINFO2ID(&m_dRows[iM*iStride]);
+
+		if ( uDocid==uM )
+			return true;
+		else if ( uDocid>uM )
+			iL = iM;
+		else
+			iR = iM;
+	}
+	return false;
+}
+
+//////////////////////////////////////////////////////////////////////////
 
 #if COMPRESSED_DOCLIST
 
@@ -420,18 +469,28 @@ struct RtHitReader_t
 
 #endif // COMPRESSED_HITLIST
 
-struct RtIndex_t : public ISphRtIndex
+//////////////////////////////////////////////////////////////////////////
+
+struct RtIndex_t : public ISphRtIndex, public ISphNoncopyable
 {
+private:
 	CSphVector<CSphWordHit>		m_dAccum;
-	CSphVector<RtSegment_t*>	m_pSegments;
+	CSphVector<CSphRowitem>		m_dAccumRows;
 	int							m_iAccumDocs;
 
-	explicit					RtIndex_t ();
+	CSphVector<RtSegment_t*>	m_pSegments;
+
+	const CSphSchema			m_tSchema;
+	const int					m_iStride;
+
+public:
+	explicit					RtIndex_t ( const CSphSchema & tSchema );
 	virtual						~RtIndex_t ();
 
-	void						AddDocument ( const CSphVector<CSphWordHit> & dHits );
+	void						AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphDocInfo & tDoc );
 	void						Commit ();
 
+private:
 	RtSegment_t *				CreateSegment ();
 	RtSegment_t *				MergeSegments ( const RtSegment_t * pSeg1, const RtSegment_t * pSeg2 );
 	const RtWord_t *			CopyWord ( RtSegment_t * pDst, RtWordWriter_t & tOutWord, const RtSegment_t * pSrc, const RtWord_t * pWord, RtWordReader_t & tInWord );
@@ -442,10 +501,12 @@ struct RtIndex_t : public ISphRtIndex
 };
 
 
-RtIndex_t::RtIndex_t ()
+RtIndex_t::RtIndex_t ( const CSphSchema & tSchema )
+	: m_iAccumDocs ( 0 )
+	, m_tSchema ( tSchema )
+	, m_iStride ( DOCINFO_IDSIZE + tSchema.GetRowSize() )
 {
 	m_dAccum.Reserve ( 2*1024*1024 );
-	m_iAccumDocs = 0;
 }
 
 
@@ -456,10 +517,24 @@ RtIndex_t::~RtIndex_t ()
 }
 
 
-void RtIndex_t::AddDocument ( const CSphVector<CSphWordHit> & dHits )
+void RtIndex_t::AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphDocInfo & tDoc )
 {
+	if ( !dHits.GetLength() )
+		return;
+
+	// accumulate row data
+	assert ( DOCINFO_IDSIZE + tDoc.m_iRowitems == m_iStride );
+	m_dAccumRows.Resize ( m_dAccumRows.GetLength() + m_iStride );
+
+	CSphRowitem * pRow = &m_dAccumRows [ m_dAccumRows.GetLength() - m_iStride ];
+	DOCINFO2ID(pRow) = tDoc.m_iDocID;
+	for ( int i=0; i<m_iStride-DOCINFO_IDSIZE; i++ )
+		DOCINFO2ATTRS(pRow)[i] = tDoc.m_pRowitems[i];
+
+	// accumulate hits
 	ARRAY_FOREACH ( i, dHits )
 		m_dAccum.Add ( dHits[i] );
+
 	m_iAccumDocs++;
 }
 
@@ -553,8 +628,15 @@ RtSegment_t * RtIndex_t::CreateSegment ()
 		tDoc.m_uHits++;
 	}
 
-	m_dAccum.Resize ( 0 );
 	pSeg->m_iDocs = m_iAccumDocs;
+
+	// copy and sort attributes
+	pSeg->m_dRows.SwapData ( m_dAccumRows );
+	sphSortDocinfos ( &pSeg->m_dRows[0], pSeg->m_dRows.GetLength()/m_iStride, m_iStride );
+
+	// clean up accumulators
+	m_dAccum.Resize ( 0 );
+	m_dAccumRows.Resize ( 0 );
 	m_iAccumDocs = 0;
 	return pSeg;
 }
@@ -565,10 +647,8 @@ const RtWord_t * RtIndex_t::CopyWord ( RtSegment_t * pDst, RtWordWriter_t & tOut
 	RtDocReader_t tInDoc ( pSrc, *pWord );
 	RtDocWriter_t tOutDoc ( pDst );
 
-	// append word to the dictionary
 	RtWord_t tNewWord = *pWord;
 	tNewWord.m_uDoc = tOutDoc.ZipDocPtr();
-	tOutWord.ZipWord ( tNewWord );
 
 	// copy docs
 	for ( ;; )
@@ -598,6 +678,9 @@ const RtWord_t * RtIndex_t::CopyWord ( RtSegment_t * pDst, RtWordWriter_t & tOut
 		// copy doc
 		tOutDoc.ZipDoc ( tDoc );
 	}
+
+	// append word to the dictionary
+	tOutWord.ZipWord ( tNewWord );
 
 	// move forward
 	return tInWord.UnzipWord ();
@@ -660,7 +743,7 @@ void RtIndex_t::MergeWord ( RtSegment_t * pSeg, const RtSegment_t * pSrc1, const
 				pDoc2 = tIn2.UnzipDoc();
 			}
 		}
-
+		// one of the segments is over? just copy the tail
 		if ( !pDoc1 || !pDoc2 )
 			break;
 
@@ -686,10 +769,96 @@ void RtIndex_t::MergeWord ( RtSegment_t * pSeg, const RtSegment_t * pSrc1, const
 }
 
 
+#if PARANOID
+static void CheckSegmentRows ( const RtSegment_t * pSeg, int iStride )
+{
+	const CSphVector<CSphRowitem> & dRows = pSeg->m_dRows; // shortcut
+	for ( int i=iStride; i<dRows.GetLength(); i+=iStride )
+		assert ( DOCINFO2ID(&dRows[i]) > DOCINFO2ID(&dRows[i-iStride]) );
+}
+#endif
+
+
 RtSegment_t * RtIndex_t::MergeSegments ( const RtSegment_t * pSeg1, const RtSegment_t * pSeg2 )
 {
+	RLOCK ( pSeg1 );
+	RLOCK ( pSeg2 );
+
+	if ( pSeg1->m_iTag > pSeg2->m_iTag )
+		Swap ( pSeg1, pSeg2 );
+
 	RtSegment_t * pSeg = new RtSegment_t ();
-	pSeg->m_iDocs = pSeg1->m_iDocs + pSeg2->m_iDocs; // !COMMIT incorrect because of dupes
+	pSeg->m_iDocs = pSeg1->m_iDocs + pSeg2->m_iDocs; // will be adjusted for dupes below
+
+	////////////////////
+	// merge attributes
+	////////////////////
+
+	// check that all the IDs are in proper asc order
+#if PARANOID
+	CheckSegmentRows ( pSeg1, m_iStride );
+	CheckSegmentRows ( pSeg2, m_iStride );
+#endif
+
+	// just a shortcut
+	CSphVector<CSphRowitem> & dRows = pSeg->m_dRows;
+
+	// we might need less because of dupes, but we can not know yet
+	dRows.Reserve ( pSeg1->m_dRows.GetLength() + pSeg2->m_dRows.GetLength() );
+
+	const CSphRowitem * pRow1 = &pSeg1->m_dRows[0];
+	const CSphRowitem * pRow2 = &pSeg2->m_dRows[0];
+	const CSphRowitem * pMaxRow1 = pRow1 + pSeg1->m_dRows.GetLength();
+	const CSphRowitem * pMaxRow2 = pRow2 + pSeg2->m_dRows.GetLength();
+
+	while ( pRow1<pMaxRow1 && pRow2<pMaxRow2 )
+	{
+		dRows.Resize ( dRows.GetLength()+m_iStride );
+		CSphRowitem * pEntry = &dRows [ dRows.GetLength()-m_iStride ];
+
+		if ( DOCINFO2ID(pRow1)==DOCINFO2ID(pRow2) )
+		{
+			// duplicate id, skip entry in the 1st index and copy from the 2nd
+			for ( int i=0; i<m_iStride; i++, pRow1++ )
+				*pEntry++ = *pRow2++;
+
+			// and adjust document count
+			pSeg->m_iDocs--;
+
+		} else if ( DOCINFO2ID(pRow1)<DOCINFO2ID(pRow2) )
+		{
+			// 1st one has unique min entry
+			for ( int i=0; i<m_iStride; i++ )
+				*pEntry++ = *pRow1++;
+		} else
+		{
+			// 2nd one has unique min entry
+			for ( int i=0; i<m_iStride; i++ )
+				*pEntry++ = *pRow2++;
+		}
+	}
+
+	// copy tail
+	int iRows = dRows.GetLength();
+	if ( pRow1<pMaxRow1 )
+	{
+		dRows.Resize ( iRows+pMaxRow1-pRow1 );
+		memcpy ( &dRows[iRows], pRow1, (pMaxRow1-pRow1)*sizeof(CSphRowitem) );
+	}
+	if ( pRow2<pMaxRow2 )
+	{
+		dRows.Resize ( iRows+pMaxRow2-pRow2 );
+		memcpy ( &dRows[iRows], pRow2, (pMaxRow2-pRow2)*sizeof(CSphRowitem) );
+	}
+
+	assert ( pSeg->m_iDocs*m_iStride==pSeg->m_dRows.GetLength() );
+#if PARANOID
+	CheckSegmentRows ( pSeg, m_iStride );
+#endif
+
+	//////////////////
+	// merge keywords
+	//////////////////
 
 	pSeg->m_dWords.Reserve ( pSeg1->m_dWords.GetLength() + pSeg2->m_dWords.GetLength() );
 	pSeg->m_dDocs.Reserve ( pSeg1->m_dDocs.GetLength() + pSeg2->m_dDocs.GetLength() );
@@ -775,10 +944,11 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 {
 	CSphString sName, sError;
 
-	CSphWriter wrHits, wrDocs, wrDict;
+	CSphWriter wrHits, wrDocs, wrDict, wrRows;
 	sName.SetSprintf ( "%s.spp", sFilename ); wrHits.OpenFile ( sName.cstr(), sError );
 	sName.SetSprintf ( "%s.spd", sFilename ); wrDocs.OpenFile ( sName.cstr(), sError );
 	sName.SetSprintf ( "%s.spi", sFilename ); wrDict.OpenFile ( sName.cstr(), sError );
+	sName.SetSprintf ( "%s.spa", sFilename ); wrRows.OpenFile ( sName.cstr(), sError );
 
 	BYTE bDummy = 1;
 	wrDict.PutBytes ( &bDummy, 1 );
@@ -888,9 +1058,12 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 	if ( dCheckpoints.GetLength() )
 		wrDict.PutBytes ( &dCheckpoints[0], dCheckpoints.GetLength()*sizeof(Checkpoint_t) );
 
+	wrRows.PutBytes ( &pSeg->m_dRows[0], pSeg->m_dRows.GetLength()*sizeof(CSphRowitem) );
+
 	wrHits.CloseFile ();
 	wrDocs.CloseFile ();
 	wrDict.CloseFile ();
+	wrRows.CloseFile ();
 
 	float tmDump = sphLongTimer ();
 	printf ( "dump done in %.2f sec\n", tmDump-tmMerged );
@@ -898,9 +1071,9 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 
 //////////////////////////////////////////////////////////////////////////
 
-ISphRtIndex * sphCreateIndexRT ()
+ISphRtIndex * sphCreateIndexRT ( const CSphSchema & tSchema )
 {
-	return new RtIndex_t ();
+	return new RtIndex_t ( tSchema );
 }
 
 //
