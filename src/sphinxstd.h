@@ -802,7 +802,7 @@ public:
 		assert ( !pEntry );
 		assert ( !*ppEntry );
 
-		pEntry = new HashEntry_t ();
+		pEntry = new HashEntry_t;
 		pEntry->m_tKey = tKey;
 		pEntry->m_tValue = tValue;
 		pEntry->m_pNextByHash = NULL;
