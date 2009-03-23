@@ -97,6 +97,9 @@ struct RtWord_t
 
 struct RtSegment_t
 {
+protected:
+	static const int			KLIST_ACCUM_THRESH	= 32;
+
 public:
 	static int					m_iSegments;	///< age tag sequence generator
 	int							m_iTag;			///< segment age tag
@@ -119,15 +122,19 @@ public:
 	CSphVector<DWORD>			m_dHits;
 #endif
 
-	int							m_iDocs;
+	int							m_iRows;		///< number of actually allocated rows
+	int							m_iAliveRows;	///< number of alive (non-killed) rows
+	CSphVector<CSphRowitem>		m_dRows;		///< row data storage
 
-	CSphVector<CSphRowitem>		m_dRows;
+	CSphVector<SphDocID_t>		m_dKlist;		///< sorted K-list
+	CSphVector<SphDocID_t>		m_dKlistAccum;	///< unsorted K-list accumulator
 
 	RtSegment_t ()
 	{
 		WLOCK ( m_iSegments );
 		m_iTag = m_iSegments++;
-		m_iDocs = 0;
+		m_iRows = 0;
+		m_iAliveRows = 0;
 	}
 
 	int GetSizeBytes () const
@@ -140,18 +147,21 @@ public:
 
 	int GetMergeFactor () const
 	{
-		return m_iDocs;
+		return m_iRows;
 	}
 
 	bool HasDocid ( SphDocID_t uDocid ) const;
+	void DeleteDocument ( SphDocID_t uDocid );
+	void OptimizeKlist ();
 };
 
 int RtSegment_t::m_iSegments = 0;
 
+
 bool RtSegment_t::HasDocid ( SphDocID_t uDocid ) const
 {
 	// binary search through the rows
-	int iStride = m_dRows.GetLength() / m_iDocs;
+	int iStride = m_dRows.GetLength() / m_iRows;
 	SphDocID_t uL = DOCINFO2ID(&m_dRows[0]);
 	SphDocID_t uR = DOCINFO2ID(&m_dRows[m_dRows.GetLength()-iStride]);
 	if ( uDocid==uL || uDocid==uR )
@@ -160,7 +170,7 @@ bool RtSegment_t::HasDocid ( SphDocID_t uDocid ) const
 		return false;
 
 	int iL = 0;
-	int iR = m_iDocs-1;
+	int iR = m_iRows-1;
 	while ( iR-iL>1 )
 	{
 		int iM = iL + (iR-iL)/2;
@@ -174,6 +184,43 @@ bool RtSegment_t::HasDocid ( SphDocID_t uDocid ) const
 			iR = iM;
 	}
 	return false;
+}
+
+
+void RtSegment_t::DeleteDocument ( SphDocID_t uDocid )
+{
+	// do we have it at all?
+	if ( !HasDocid ( uDocid ) )
+		return;
+
+	// do we kill it already?
+	if ( m_dKlist.BinarySearch ( uDocid ) )
+		return;
+
+	ARRAY_FOREACH ( i, m_dKlistAccum )
+		if ( m_dKlistAccum[i]==uDocid )
+			return;
+
+	// update the segment
+	WLOCK ( this );
+	m_dKlistAccum.Add ( uDocid );
+
+	// merge and sort
+	// OPTIMIZE? would sorting accum and merging be faster?
+	if ( m_dKlistAccum.GetLength()==KLIST_ACCUM_THRESH )
+		OptimizeKlist(); // FIXME? nested wlock
+
+	m_iAliveRows--;
+}
+
+
+void RtSegment_t::OptimizeKlist ()
+{
+	WLOCK ( this );
+	ARRAY_FOREACH ( i, m_dKlistAccum )
+		m_dKlist.Add ( m_dKlistAccum[i] );
+	m_dKlist.Sort ();
+	m_dKlistAccum.Resize ( 0 );
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -488,6 +535,7 @@ public:
 	virtual						~RtIndex_t ();
 
 	void						AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphDocInfo & tDoc );
+	void						DeleteDocument ( SphDocID_t uDoc );
 	void						Commit ();
 
 private:
@@ -519,6 +567,10 @@ RtIndex_t::~RtIndex_t ()
 
 void RtIndex_t::AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphDocInfo & tDoc )
 {
+	// kill existing copies
+	DeleteDocument ( tDoc.m_iDocID );
+
+	// !COMMIT make Add/Commit local to given thread
 	if ( !dHits.GetLength() )
 		return;
 
@@ -628,7 +680,8 @@ RtSegment_t * RtIndex_t::CreateSegment ()
 		tDoc.m_uHits++;
 	}
 
-	pSeg->m_iDocs = m_iAccumDocs;
+	pSeg->m_iRows = m_iAccumDocs;
+	pSeg->m_iAliveRows = m_iAccumDocs;
 
 	// copy and sort attributes
 	pSeg->m_dRows.SwapData ( m_dAccumRows );
@@ -657,6 +710,15 @@ const RtWord_t * RtIndex_t::CopyWord ( RtSegment_t * pDst, RtWordWriter_t & tOut
 		if ( !pDoc )
 			break;
 
+		// apply klist
+		assert ( pSrc->m_dKlistAccum.GetLength()==0 );
+		if ( pSrc->m_dKlist.BinarySearch ( pDoc->m_uDocID ) )
+		{
+			tNewWord.m_uDocs--;
+			tNewWord.m_uHits -= pDoc->m_uHits;
+			continue;
+		}
+
 		// short route, single embedded hit
 		if ( pDoc->m_uHits==1 )
 		{
@@ -680,7 +742,8 @@ const RtWord_t * RtIndex_t::CopyWord ( RtSegment_t * pDst, RtWordWriter_t & tOut
 	}
 
 	// append word to the dictionary
-	tOutWord.ZipWord ( tNewWord );
+	if ( tNewWord.m_uDocs )
+		tOutWord.ZipWord ( tNewWord );
 
 	// move forward
 	return tInWord.UnzipWord ();
@@ -728,44 +791,35 @@ void RtIndex_t::MergeWord ( RtSegment_t * pSeg, const RtSegment_t * pSrc1, const
 	const RtDoc_t * pDoc1 = tIn1.UnzipDoc();
 	const RtDoc_t * pDoc2 = tIn2.UnzipDoc();
 
-	for ( ;; )
+	while ( pDoc1 || pDoc2 )
 	{
-		// copy non-matching docs
-		while ( pDoc1 && pDoc2 && pDoc1->m_uDocID!=pDoc2->m_uDocID )
+		if ( pDoc1 && pDoc2 && pDoc1->m_uDocID==pDoc2->m_uDocID )
 		{
-			if ( pDoc1->m_uDocID < pDoc2->m_uDocID )
-			{
-				CopyDoc ( pSeg, tOutDoc, &tWord, pSrc1, pDoc1 );
-				pDoc1 = tIn1.UnzipDoc();
-			} else
-			{
+			// dupe, must (!) be killed in the first segment, might be in both
+			assert ( pSrc1->m_dKlist.BinarySearch ( pDoc1->m_uDocID ) );
+			if ( !pSrc2->m_dKlist.BinarySearch ( pDoc2->m_uDocID ) )
 				CopyDoc ( pSeg, tOutDoc, &tWord, pSrc2, pDoc2 );
-				pDoc2 = tIn2.UnzipDoc();
-			}
+			pDoc2 = tIn2.UnzipDoc();
+
+		} else if ( pDoc1 && ( !pDoc2 || pDoc1->m_uDocID < pDoc2->m_uDocID ) )
+		{
+			// winner from the first segment
+			if ( !pSrc1->m_dKlist.BinarySearch ( pDoc1->m_uDocID ) )
+				CopyDoc ( pSeg, tOutDoc, &tWord, pSrc1, pDoc1 );
+			pDoc1 = tIn1.UnzipDoc();
+
+		} else
+		{
+			// winner from the second segment
+			assert ( pDoc2 && ( !pDoc1 || pDoc2->m_uDocID < pDoc1->m_uDocID ) );
+			if ( !pSrc2->m_dKlist.BinarySearch ( pDoc2->m_uDocID ) )
+				CopyDoc ( pSeg, tOutDoc, &tWord, pSrc2, pDoc2 );
+			pDoc2 = tIn2.UnzipDoc();
 		}
-		// one of the segments is over? just copy the tail
-		if ( !pDoc1 || !pDoc2 )
-			break;
-
-		// merge matching docs
-		assert ( pDoc1 && pDoc2 && pDoc1->m_uDocID==pDoc2->m_uDocID );
-		assert ( 0 );
-		sphDie ( "!COMMIT not implemented yet" );
 	}
 
-	assert ( !pDoc1 || !pDoc2 );
-	while ( pDoc1 )
-	{
-		CopyDoc ( pSeg, tOutDoc, &tWord, pSrc1, pDoc1 );
-		pDoc1 = tIn1.UnzipDoc();
-	}
-	while ( pDoc2 )
-	{
-		CopyDoc ( pSeg, tOutDoc, &tWord, pSrc2, pDoc2 );
-		pDoc2 = tIn2.UnzipDoc();
-	}
-
-	tOut.ZipWord ( tWord );
+	if ( tWord.m_uDocs )
+		tOut.ZipWord ( tWord );
 }
 
 
@@ -779,16 +833,64 @@ static void CheckSegmentRows ( const RtSegment_t * pSeg, int iStride )
 #endif
 
 
+struct RtRowIterator_t : public ISphNoncopyable
+{
+protected:
+	const CSphRowitem * m_pRow;
+	const CSphRowitem * m_pRowMax;
+	const SphDocID_t * m_pKlist;
+	const SphDocID_t * m_pKlistMax;
+	const int m_iStride;
+
+public:
+	explicit RtRowIterator_t ( const RtSegment_t * pSeg, int iStride )
+		: m_pRow ( &pSeg->m_dRows[0] )
+		, m_pRowMax ( &pSeg->m_dRows[0] + pSeg->m_dRows.GetLength() )
+		, m_pKlist ( pSeg->m_dKlist.GetLength()==0 ? NULL : &pSeg->m_dKlist[0] )
+		, m_pKlistMax ( pSeg->m_dKlist.GetLength()==0 ? NULL : &pSeg->m_dKlist[0] + pSeg->m_dKlist.GetLength() )
+		, m_iStride ( iStride )
+	{}
+
+	const CSphRowitem * GetNextAliveRow ()
+	{
+		if ( m_pRow>=m_pRowMax )
+			return NULL;
+
+		while ( m_pKlist<m_pKlistMax )
+		{
+			SphDocID_t uID = DOCINFO2ID(m_pRow);
+			while ( m_pKlist<m_pKlistMax && *m_pKlist<uID )
+				m_pKlist++;
+
+			assert ( m_pKlist>=m_pKlistMax || *m_pKlist>=uID );
+			if (!( m_pKlist<m_pKlistMax && *m_pKlist==uID ))
+				break;
+
+			m_pKlist++;
+			m_pRow += m_iStride;
+			if ( m_pRow>=m_pRowMax )
+				return NULL;
+		}
+
+		m_pRow += m_iStride;
+		return m_pRow-m_iStride;
+	}
+};
+
+
 RtSegment_t * RtIndex_t::MergeSegments ( const RtSegment_t * pSeg1, const RtSegment_t * pSeg2 )
 {
 	RLOCK ( pSeg1 );
 	RLOCK ( pSeg2 );
 
+	// check that k-lists are optimized
+	assert ( pSeg1->m_dKlistAccum.GetLength()==0 );
+	assert ( pSeg2->m_dKlistAccum.GetLength()==0 );
+
 	if ( pSeg1->m_iTag > pSeg2->m_iTag )
 		Swap ( pSeg1, pSeg2 );
 
 	RtSegment_t * pSeg = new RtSegment_t ();
-	pSeg->m_iDocs = pSeg1->m_iDocs + pSeg2->m_iDocs; // will be adjusted for dupes below
 
 	////////////////////
 	// merge attributes
@@ -806,52 +908,33 @@ RtSegment_t * RtIndex_t::MergeSegments ( const RtSegment_t * pSeg1, const RtSegm
 	// we might need less because of dupes, but we can not know yet
 	dRows.Reserve ( pSeg1->m_dRows.GetLength() + pSeg2->m_dRows.GetLength() );
 
-	const CSphRowitem * pRow1 = &pSeg1->m_dRows[0];
-	const CSphRowitem * pRow2 = &pSeg2->m_dRows[0];
-	const CSphRowitem * pMaxRow1 = pRow1 + pSeg1->m_dRows.GetLength();
-	const CSphRowitem * pMaxRow2 = pRow2 + pSeg2->m_dRows.GetLength();
+	RtRowIterator_t tIt1 ( pSeg1, m_iStride );
+	RtRowIterator_t tIt2 ( pSeg2, m_iStride );
 
-	while ( pRow1<pMaxRow1 && pRow2<pMaxRow2 )
+	const CSphRowitem * pRow1 = tIt1.GetNextAliveRow();
+	const CSphRowitem * pRow2 = tIt2.GetNextAliveRow();
+
+	while ( pRow1 || pRow2 )
 	{
-		dRows.Resize ( dRows.GetLength()+m_iStride );
-		CSphRowitem * pEntry = &dRows [ dRows.GetLength()-m_iStride ];
-
-		if ( DOCINFO2ID(pRow1)==DOCINFO2ID(pRow2) )
+		if ( !pRow2 || ( pRow1 && pRow2 && DOCINFO2ID(pRow1)<DOCINFO2ID(pRow2) ) )
 		{
-			// duplicate id, skip entry in the 1st index and copy from the 2nd
-			for ( int i=0; i<m_iStride; i++, pRow1++ )
-				*pEntry++ = *pRow2++;
-
-			// and adjust document count
-			pSeg->m_iDocs--;
-
-		} else if ( DOCINFO2ID(pRow1)<DOCINFO2ID(pRow2) )
-		{
-			// 1st one has unique min entry
+			assert ( pRow1 );
 			for ( int i=0; i<m_iStride; i++ )
-				*pEntry++ = *pRow1++;
+				dRows.Add ( *pRow1++ );
+			pRow1 = tIt1.GetNextAliveRow();
 		} else
 		{
-			// 2nd one has unique min entry
+			assert ( pRow2 );
+			assert ( !pRow1 || ( DOCINFO2ID(pRow1)!=DOCINFO2ID(pRow2) ) ); // all dupes must be killed and skipped by the iterator
 			for ( int i=0; i<m_iStride; i++ )
-				*pEntry++ = *pRow2++;
+				dRows.Add ( *pRow2++ );
+			pRow2 = tIt2.GetNextAliveRow();
 		}
+		pSeg->m_iRows++;
+		pSeg->m_iAliveRows++;
 	}
 
-	// copy tail
-	int iRows = dRows.GetLength();
-	if ( pRow1<pMaxRow1 )
-	{
-		dRows.Resize ( iRows+pMaxRow1-pRow1 );
-		memcpy ( &dRows[iRows], pRow1, (pMaxRow1-pRow1)*sizeof(CSphRowitem) );
-	}
-	if ( pRow2<pMaxRow2 )
-	{
-		dRows.Resize ( iRows+pMaxRow2-pRow2 );
-		memcpy ( &dRows[iRows], pRow2, (pMaxRow2-pRow2)*sizeof(CSphRowitem) );
-	}
-
-	assert ( pSeg->m_iDocs*m_iStride==pSeg->m_dRows.GetLength() );
+	assert ( pSeg->m_iRows*m_iStride==pSeg->m_dRows.GetLength() );
 #if PARANOID
 	CheckSegmentRows ( pSeg, m_iStride );
 #endif
@@ -891,6 +974,10 @@ RtSegment_t * RtIndex_t::MergeSegments ( const RtSegment_t * pSeg1, const RtSegm
 	// copy tails
 	while ( pWords1 ) pWords1 = CopyWord ( pSeg, tOut, pSeg1, pWords1, tIn1 );
 	while ( pWords2 ) pWords2 = CopyWord ( pSeg, tOut, pSeg2, pWords2, tIn2 );
+
+	assert ( pSeg->m_dRows.GetLength() );
+	assert ( pSeg->m_iRows );
+	assert ( pSeg->m_iAliveRows );
 	return pSeg;
 }
 
@@ -906,12 +993,19 @@ struct CmpSegments_fn
 
 void RtIndex_t::Commit ()
 {
+	// !COMMIT make Add/Commit local to given thread
+	WLOCK ( this );
+
 	if ( !m_dAccum.GetLength() )
 		return;
 
+	RtSegment_t * pNewSeg = CreateSegment();
+	assert ( pNewSeg->m_iRows );
+	assert ( pNewSeg->m_iAliveRows );
+
 	CSphVector<RtSegment_t*> dSegments;
 	dSegments = m_pSegments;
-	dSegments.Add ( CreateSegment() );
+	dSegments.Add ( pNewSeg );
 
 	CSphVector<RtSegment_t*> dToKill;
 
@@ -929,6 +1023,8 @@ void RtIndex_t::Commit ()
 
 		RtSegment_t * pA = dSegments.Pop();
 		RtSegment_t * pB = dSegments.Pop();
+		pA->OptimizeKlist();
+		pB->OptimizeKlist();
 		dSegments.Add ( MergeSegments ( pA, pB ) );
 		dToKill.Add ( pA );
 		dToKill.Add ( pB );
@@ -937,6 +1033,14 @@ void RtIndex_t::Commit ()
 	Swap ( m_pSegments, dSegments ); // !COMMIT atomic
 	ARRAY_FOREACH ( i, dToKill )
 		SafeDelete ( dToKill[i] ); // unused now
+}
+
+
+void RtIndex_t::DeleteDocument ( SphDocID_t uDoc )
+{
+	RLOCK ( this );
+	ARRAY_FOREACH ( i, m_pSegments )
+		m_pSegments[i]->DeleteDocument ( uDoc );
 }
 
 
@@ -962,6 +1066,8 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 		m_pSegments.Sort ( CmpSegments_fn() );
 		RtSegment_t * pSeg1 = m_pSegments.Pop();
 		RtSegment_t * pSeg2 = m_pSegments.Pop();
+		pSeg1->OptimizeKlist ();
+		pSeg2->OptimizeKlist ();
 		m_pSegments.Add ( MergeSegments ( pSeg1, pSeg2 ) );
 		SafeDelete ( pSeg1 );
 		SafeDelete ( pSeg2 );

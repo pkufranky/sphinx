@@ -90,7 +90,7 @@ void main ()
 	tParams.m_sUser = "root";
 	tParams.m_sDB = "lj";
 	tParams.m_dQueryPre.Add ( "SET NAMES utf8" );
-	tParams.m_sQuery = "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM rt2 WHERE id<=10000";
+	tParams.m_sQuery = "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM rt1 WHERE id<=10000";
 
 	CSphColumnInfo tCol;
 	tCol.m_eAttrType = SPH_ATTR_INTEGER;
@@ -112,9 +112,9 @@ void main ()
 	DoIndexing ( pSrc, pIndex );
 
 	// update
-//	tParams.m_sQuery = "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM rt2 WHERE id<=10000";
-//	SetupIndexing ( pSrc, tParams );
-//	DoIndexing ( pSrc, pIndex );
+	tParams.m_sQuery = "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM rt2 WHERE id<=10000";
+	SetupIndexing ( pSrc, tParams );
+	DoIndexing ( pSrc, pIndex );
 
 	// dump
 	printf ( "pre-dump allocs=%d, bytes=%d\n", sphAllocsCount(), sphAllocBytes() );
