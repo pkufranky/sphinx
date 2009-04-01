@@ -565,6 +565,17 @@ class SphinxClient
 			return false;
 		}
 
+		// send my version
+		// this is a subtle part. we must do it before (!) reading back from searchd.
+		// because otherwise under some conditions (reported on FreeBSD for instance)
+		// TCP stack could throttle write-write-read pattern because of Nagle.
+		if ( !$this->_Send ( $fp, pack ( "N", 1 ), 4 ) )
+		{
+			fclose ( $fp );
+			$this->_error = "failed to send client protocol version";
+			return false;
+		}
+
 		// check version
 		list(,$v) = unpack ( "N*", fread ( $fp, 4 ) );
 		$v = (int)$v;
@@ -575,9 +586,6 @@ class SphinxClient
 			return false;
 		}
 
-		// all ok, send my version
-		if ( !$this->_Send ( $fp, pack ( "N", 1 ), 4 ) )
-			return false;
 		return $fp;
 	}
 
@@ -1577,35 +1585,19 @@ class SphinxClient
 		}
 
 		$res = substr ( $response, 4 ); // just ignore length, error handling, etc
+		$p = 0;
+		list ( $rows, $cols ) = array_values ( unpack ( "N*N*", substr ( $response, $p, 8 ) ) ); $p += 8;
+
+		$res = array();
+		for ( $i=0; $i<$rows; $i++ )
+			for ( $j=0; $j<$cols; $j++ )
+		{
+			list(,$len) = unpack ( "N*", substr ( $response, $p, 4 ) ); $p += 4;
+			$res[$i][] = substr ( $response, $p, $len ); $p += $len;
+		}
+
 		$this->_MBPop ();
 		return $res;
-	}
-
-	//////////////////////////////////////////////////////////////////////////
-	// sphinxql query
-	//////////////////////////////////////////////////////////////////////////
-
-	function SqlQuery ( $query )
-	{
-		$this->_MBPush ();
-		if (!( $fp = $this->_Connect() ))
-		{
-			$this->_MBPop();
-			return false;
-		}
-
-		$len = strlen($query);
-		$req = pack ( "nnNNN", SEARCHD_COMMAND_QUERY, VER_COMMAND_QUERY, 8+$len, VER_COMMAND_SEARCH, $len ) . $query;
-		if ( !( $this->_Send ( $fp, $req, 16+$len ) ) ||
-			 !( $response = $this->_GetResponse ( $fp, VER_COMMAND_QUERY ) ) )
-		{
-			$this->_MBPop ();
-			return false;
-		}
-
-		// parse and return response
-		$results = $this->_ParseSearchResponse ( $response, 1 );
-		return $results[0];
 	}
 }
 

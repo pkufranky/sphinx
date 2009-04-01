@@ -40,6 +40,7 @@ bool			g_bBuildFreqs	= false;
 
 int				g_iMemLimit				= 0;
 int				g_iMaxXmlpipe2Field		= 0;
+int				g_iWriteBuffer			= 0;
 
 const int		EXT_COUNT = 7;
 const char *	g_dExt[EXT_COUNT] = { "sph", "spa", "spi", "spd", "spp", "spm", "spk" };
@@ -285,6 +286,7 @@ void ShowProgress ( const CSphIndexProgress * pProgress, bool bPhaseEnd )
 			fprintf ( stdout, "sorted %.1f Mvalues, %.1f%% done", float(pProgress->m_iAttrs)/1000000,
 				100.0f*float(pProgress->m_iAttrs) / float(pProgress->m_iAttrsTotal) );
 			break;
+
 		case CSphIndexProgress::PHASE_MERGE:
 			fprintf ( stdout, "merged %.1f Kwords", float(pProgress->m_iWords)/1000 );
 			break;
@@ -562,30 +564,50 @@ CSphSource * SpawnSourceMySQL ( const CSphConfigSection & hSource, const char * 
 }
 #endif // USE_MYSQL
 
-#if ( USE_WINDOWS && USE_MSSQL )
+
+#if USE_ODBC
+CSphSource * SpawnSourceODBC ( const CSphConfigSection & hSource, const char * sSourceName )
+{
+	assert ( hSource["type"]=="odbc" );
+
+	CSphSourceParams_ODBC tParams;
+	if ( !SqlParamsConfigure ( tParams, hSource, sSourceName ) )
+		return NULL;
+
+	LOC_GETS ( tParams.m_sOdbcDSN, "odbc_dsn" );
+
+	CSphSource_ODBC * pSrc = new CSphSource_ODBC ( sSourceName );
+	if ( !pSrc->Setup ( tParams ) )
+		SafeDelete ( pSrc );
+
+	return pSrc;
+}
+
+
 CSphSource * SpawnSourceMSSQL ( const CSphConfigSection & hSource, const char * sSourceName )
 {
 	assert ( hSource["type"]=="mssql" );
 
-	CSphSourceParams_MSSQL tParams;
+	CSphSourceParams_ODBC tParams;
 	if ( !SqlParamsConfigure ( tParams, hSource, sSourceName ) )
 		return NULL;
 
 	LOC_GETB ( tParams.m_bWinAuth, "mssql_winauth" );
 	LOC_GETB ( tParams.m_bUnicode, "mssql_unicode" );
 
-	CSphSource_MSSQL * pSrcMSSQL = new CSphSource_MSSQL ( sSourceName );
-	if ( !pSrcMSSQL->Setup ( tParams ) )
-		SafeDelete ( pSrcMSSQL );
+	CSphSource_MSSQL * pSrc = new CSphSource_MSSQL ( sSourceName );
+	if ( !pSrc->Setup ( tParams ) )
+		SafeDelete ( pSrc );
 
-	return pSrcMSSQL;
+	return pSrc;
 }
-#endif // USE_MSSQL
+#endif // USE_ODBC
+
 
 CSphSource * SpawnSourceXMLPipe ( const CSphConfigSection & hSource, const char * sSourceName, bool bUTF8 )
 {
 	assert ( hSource["type"]=="xmlpipe" || hSource["type"]=="xmlpipe2" );
-	
+
 	LOC_CHECK ( hSource, "xmlpipe_command", "in source '%s'.", sSourceName );
 
 	CSphSource * pSrcXML = NULL;
@@ -601,7 +623,7 @@ CSphSource * SpawnSourceXMLPipe ( const CSphConfigSection & hSource, const char 
 	{
 		fprintf ( stdout, "ERROR: xmlpipe: failed to popen '%s'", sCommand.cstr() );
 		return NULL;
-	}	
+	}
 
 	if ( bUsePipe2 )
 	{
@@ -648,7 +670,10 @@ CSphSource * SpawnSource ( const CSphConfigSection & hSource, const char * sSour
 		return SpawnSourceMySQL ( hSource, sSourceName );
 	#endif
 
-	#if USE_MSSQL
+	#if USE_ODBC
+	if ( hSource["type"]=="odbc")
+		return SpawnSourceODBC ( hSource, sSourceName );
+
 	if ( hSource["type"]=="mssql")
 		return SpawnSourceMSSQL ( hSource, sSourceName );
 	#endif
@@ -697,7 +722,7 @@ bool DoIndex ( const CSphConfigSection & hIndex, const char * sIndexName, const 
 		return false;
 	}
 
-	if ( ( hIndex.GetInt ( "min_prefix_len", 0 ) > 0 || hIndex.GetInt ( "min_infix_len", 0 ) > 0 ) 
+	if ( ( hIndex.GetInt ( "min_prefix_len", 0 ) > 0 || hIndex.GetInt ( "min_infix_len", 0 ) > 0 )
 		&& hIndex.GetInt ( "enable_star" ) == 0 )
 	{
 		const char * szMorph = hIndex.GetStr ( "morphology", "" );
@@ -748,10 +773,10 @@ bool DoIndex ( const CSphConfigSection & hIndex, const char * sIndexName, const 
 
 	CSphString sPrefixFields, sInfixFields;
 
-	if ( hIndex.Exists ( "prefix_fields" ) ) 
+	if ( hIndex.Exists ( "prefix_fields" ) )
 		sPrefixFields = hIndex ["prefix_fields"].cstr ();
 
-	if ( hIndex.Exists ( "infix_fields" ) ) 
+	if ( hIndex.Exists ( "infix_fields" ) )
 		sInfixFields = hIndex ["infix_fields"].cstr ();
 
 	if ( iPrefix == 0 && !sPrefixFields.IsEmpty () )
@@ -878,7 +903,7 @@ bool DoIndex ( const CSphConfigSection & hIndex, const char * sIndexName, const 
 	// do work
 	///////////
 
-	float fTime = sphLongTimer ();
+	int64_t tmTime = sphMicroTimer();
 	bool bOK = false;
 
 	if ( g_sBuildStops )
@@ -950,7 +975,7 @@ bool DoIndex ( const CSphConfigSection & hIndex, const char * sIndexName, const 
 		pIndex->SetDictionary ( pDict );
 		pIndex->Setup ( tSettings );
 
-		bOK = pIndex->Build ( dSources, g_iMemLimit )!=0;
+		bOK = pIndex->Build ( dSources, g_iMemLimit, g_iWriteBuffer )!=0;
 		if ( bOK && g_bRotate )
 		{
 			sIndexPath.SetSprintf ( "%s.new", hIndex["path"].cstr() );
@@ -966,24 +991,26 @@ bool DoIndex ( const CSphConfigSection & hIndex, const char * sIndexName, const 
 	}
 
 	// trip report
-	fTime = sphLongTimer () - fTime;
+	tmTime = sphMicroTimer() - tmTime;
 	if ( !g_bQuiet )
 	{
-		fTime = Max ( fTime, 0.01f );
+		tmTime = Max ( tmTime, 1 );
+		int64_t iTotalDocs = 0;
+		int64_t iTotalBytes = 0;
 
-		CSphSourceStats tTotal;
 		ARRAY_FOREACH ( i, dSources )
 		{
 			const CSphSourceStats & tSource = dSources[i]->GetStats();
-			tTotal.m_iTotalDocuments += tSource.m_iTotalDocuments;
-			tTotal.m_iTotalBytes += tSource.m_iTotalBytes;
+			iTotalDocs += tSource.m_iTotalDocuments;
+			iTotalBytes += tSource.m_iTotalBytes;
 		}
 
-		fprintf ( stdout, "total %d docs, %"PRIi64" bytes\n",
-			tTotal.m_iTotalDocuments, tTotal.m_iTotalBytes );
+		fprintf ( stdout, "total %d docs, %"PRIi64" bytes\n", (int)iTotalDocs, iTotalBytes );
 
-		fprintf ( stdout, "total %.3f sec, %.2f bytes/sec, %.2f docs/sec\n",
-			fTime, tTotal.m_iTotalBytes/fTime, tTotal.m_iTotalDocuments/fTime );
+		fprintf ( stdout, "total %d.%03d sec, %d bytes/sec, %d.%02d docs/sec\n",
+			int(tmTime/1000000), int(tmTime%1000000)/1000, // sec
+			int(iTotalBytes*1000000/tmTime), // bytes/sec
+			int(iTotalDocs*1000000/tmTime), int(iTotalDocs*1000000*100/tmTime)%100 ); // docs/sec
 	}
 
 	// cleanup and go on
@@ -1048,18 +1075,18 @@ bool DoMerge ( const CSphConfigSection & hDst, const char * sDst,
 
 	pDst->SetProgressCallback ( ShowProgress );
 
-	float tmMerge = -sphLongTimer ();
+	int64_t tmMergeTime = sphMicroTimer();
 	if ( !pDst->Merge ( pSrc, tPurge, bMergeKillLists ) )
 		sphDie ( "failed to merge index '%s' into index '%s': %s", sSrc, sDst, pDst->GetLastError().cstr() );
-	tmMerge += sphLongTimer ();
+	tmMergeTime = sphMicroTimer() - tmMergeTime;
 	if ( !g_bQuiet )
-		printf ( "merged in %.1f sec\n", tmMerge );
+		printf ( "merged in %d.%03d sec\n", int(tmMergeTime/1000000), int(tmMergeTime%1000000)/1000 );
 
 	// pick up merge result
 	const char * sPath = hDst["path"].cstr();
 	char sFrom [ SPH_MAX_FILENAME_LEN ];
 	char sTo [ SPH_MAX_FILENAME_LEN ];
-	struct stat tFileInfo; 
+	struct stat tFileInfo;
 
 	int iExt;
 	for ( iExt=0; iExt<EXT_COUNT; iExt++ )
@@ -1075,12 +1102,12 @@ bool DoMerge ( const CSphConfigSection & hDst, const char * sDst,
 		sTo [ sizeof(sTo)-1 ] = '\0';
 
 		if ( !stat( sTo, &tFileInfo ) )
-		{		
+		{
 			if ( remove ( sTo ) )
 			{
 				fprintf ( stdout, "ERROR: index '%s': failed to delete '%s': %s",
 					sDst, sTo, strerror(errno) );
-				break;			
+				break;
 			}
 		}
 
@@ -1109,10 +1136,29 @@ bool DoMerge ( const CSphConfigSection & hDst, const char * sDst,
 // ENTRY
 //////////////////////////////////////////////////////////////////////////
 
+void ReportIOStats ( const char * sType, int iReads, int64_t iReadTime, int64_t iReadBytes )
+{
+	if ( iReads==0 )
+	{
+		fprintf ( stdout, "total %d %s, %d.%03d sec, 0.0 kb/call avg, 0.0 msec/call avg\n",
+			iReads, sType,
+			int(iReadTime/1000000), int(iReadTime%1000000)/1000 );
+	} else
+	{
+		iReadBytes /= iReads;
+		fprintf ( stdout, "total %d %s, %d.%03d sec, %d.%d kb/call avg, %d.%d msec/call avg\n",
+			iReads, sType,
+			int(iReadTime/1000000), int(iReadTime%1000000)/1000,
+			int(iReadBytes/1024), int(iReadBytes%1024)*10/1024,
+			int(iReadTime/iReads/1000), int(iReadTime/iReads/100)%10 );
+	}
+}
+
+
 int main ( int argc, char ** argv )
 {
 	const char * sOptConfig = NULL;
-	bool bMerge = false;	
+	bool bMerge = false;
 	CSphVector<CSphFilterSettings> dMergeDstFilters;
 
 	CSphVector<const char *> dIndexes;
@@ -1198,7 +1244,7 @@ int main ( int argc, char ** argv )
 		if ( argc>1 )
 		{
 			fprintf ( stdout, "ERROR: malformed or unknown option near '%s'.\n", argv[i] );
-		
+
 		} else
 		{
 			fprintf ( stdout,
@@ -1255,6 +1301,8 @@ int main ( int argc, char ** argv )
 
 		g_iMemLimit = hIndexer.GetSize ( "mem_limit", 0 );
 		g_iMaxXmlpipe2Field = hIndexer.GetSize ( "max_xmlpipe2_field", 2*1024*1024 );
+		g_iWriteBuffer = hIndexer.GetSize ( "write_buffer", 1024*1024 );
+
 		sphSetThrottling ( hIndexer.GetInt ( "max_iops", 0 ), hIndexer.GetSize ( "max_iosize", 0 ) );
 	}
 
@@ -1301,14 +1349,8 @@ int main ( int argc, char ** argv )
 
 	if ( !g_bQuiet )
 	{
-		fprintf ( stdout, "total %d reads, %.1f sec, %.1f kb/read avg, %.1f msec/read avg\n",
-			tStats.m_iReadOps, tStats.m_fReadTime,
-			tStats.m_iReadOps ? tStats.m_fReadKBytes / tStats.m_iReadOps : 0.0f,
-			tStats.m_iReadOps ? tStats.m_fReadTime / tStats.m_iReadOps * 1000.0f : 0.0f );
-		fprintf ( stdout, "total %d writes, %.1f sec, %.1f kb/write avg, %.1f msec/write avg\n",
-			tStats.m_iWriteOps, tStats.m_fWriteTime,
-			tStats.m_iWriteOps ? tStats.m_fWriteKBytes / tStats.m_iWriteOps : 0.0f,
-			tStats.m_iWriteOps ? tStats.m_fWriteTime / tStats.m_iWriteOps * 1000.0f : 0.0f );
+		ReportIOStats ( "reads", tStats.m_iReadOps, tStats.m_iReadTime, tStats.m_iReadBytes );
+		ReportIOStats ( "writes", tStats.m_iWriteOps, tStats.m_iWriteTime, tStats.m_iWriteBytes );
 	}
 
 	////////////////////////////
@@ -1355,28 +1397,28 @@ int main ( int argc, char ** argv )
 
 			HANDLE hPipe = INVALID_HANDLE_VALUE;
 
-			while ( hPipe == INVALID_HANDLE_VALUE ) 
-			{ 
+			while ( hPipe == INVALID_HANDLE_VALUE )
+			{
 				hPipe = CreateFile ( szPipeName, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL );
 
-				if ( hPipe == INVALID_HANDLE_VALUE ) 
+				if ( hPipe == INVALID_HANDLE_VALUE )
 				{
-					if ( GetLastError () != ERROR_PIPE_BUSY ) 
+					if ( GetLastError () != ERROR_PIPE_BUSY )
 					{
 						fprintf ( stdout, "WARNING: could not open pipe (GetLastError()=%d)\n", GetLastError () );
 						break;
 					}
 
-					if ( !WaitNamedPipe ( szPipeName, 1000 ) ) 
-					{ 
+					if ( !WaitNamedPipe ( szPipeName, 1000 ) )
+					{
 						fprintf ( stdout, "WARNING: could not open pipe (GetLastError()=%d)\n", GetLastError () );
 						break;
-					} 
+					}
 				}
-			} 
+			}
 
 			if ( hPipe != INVALID_HANDLE_VALUE )
-			{	
+			{
 				DWORD uWritten = 0;
 				BYTE uWrite = 0;
 				BOOL bResult = WriteFile ( hPipe, &uWrite, 1, &uWritten, NULL );

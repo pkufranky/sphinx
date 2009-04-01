@@ -28,18 +28,27 @@ SPACE				[ \t\n]
 
 "AS"				{ YYSTOREBOUNDS; return TOK_AS; }
 "ASC"				{ YYSTOREBOUNDS; return TOK_ASC; }
+"AVG"				{ YYSTOREBOUNDS; return TOK_AVG; }
 "BETWEEN"			{ YYSTOREBOUNDS; return TOK_BETWEEN; }
 "BY"				{ YYSTOREBOUNDS; return TOK_BY; }
+"COUNT"				{ YYSTOREBOUNDS; return TOK_COUNT; }
 "DESC"				{ YYSTOREBOUNDS; return TOK_DESC; }
+"DISTINCT"			{ YYSTOREBOUNDS; return TOK_DISTINCT; }
 "FROM"				{ YYSTOREBOUNDS; return TOK_FROM; }
 "GROUP"				{ YYSTOREBOUNDS; return TOK_GROUP; }
 "LIMIT"				{ YYSTOREBOUNDS; return TOK_LIMIT; }
 "IN"				{ YYSTOREBOUNDS; return TOK_IN; }
 "ID"				{ YYSTOREBOUNDS; return TOK_ID; }
 "MATCH"				{ YYSTOREBOUNDS; return TOK_MATCH; }
+"MAX"				{ YYSTOREBOUNDS; return TOK_MAX; }
+"META"				{ YYSTOREBOUNDS; return TOK_META; }
+"MIN"				{ YYSTOREBOUNDS; return TOK_MIN; }
+"OPTION"			{ YYSTOREBOUNDS; return TOK_OPTION; }
 "ORDER"				{ YYSTOREBOUNDS; return TOK_ORDER; }
 "SELECT"			{ YYSTOREBOUNDS; return TOK_SELECT; }
 "SHOW"				{ YYSTOREBOUNDS; return TOK_SHOW; }
+"STATUS"			{ YYSTOREBOUNDS; return TOK_STATUS; }
+"SUM"				{ YYSTOREBOUNDS; return TOK_SUM; }
 "WARNINGS"			{ YYSTOREBOUNDS; return TOK_WARNINGS; }
 "WEIGHT"			{ YYSTOREBOUNDS; return TOK_WEIGHT; }
 "WITHIN"			{ YYSTOREBOUNDS; return TOK_WITHIN; }
@@ -56,7 +65,7 @@ SPACE				[ \t\n]
 
 '([^']|\\')*'		{ YYSTOREBOUNDS; SqlUnescape ( lvalp->m_sValue, yytext, yyleng ); return TOK_QUOTED_STRING; }
 
-{DIGIT}+			{ YYSTOREBOUNDS; lvalp->m_sValue = yytext; lvalp->m_iValue = strtoll ( yytext, NULL, 10 ); return TOK_CONST; }
+-*{DIGIT}+			{ YYSTOREBOUNDS; lvalp->m_sValue = yytext; lvalp->m_iValue = strtoll ( yytext, NULL, 10 ); return TOK_CONST; }
 
 "@id"				{ YYSTOREBOUNDS; lvalp->m_sValue = yytext; return TOK_IDENT; }
 "@weight"			{ YYSTOREBOUNDS; lvalp->m_sValue = yytext; return TOK_IDENT; }

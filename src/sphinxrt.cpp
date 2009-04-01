@@ -579,7 +579,7 @@ void RtIndex_t::AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphD
 	m_dAccumRows.Resize ( m_dAccumRows.GetLength() + m_iStride );
 
 	CSphRowitem * pRow = &m_dAccumRows [ m_dAccumRows.GetLength() - m_iStride ];
-	DOCINFO2ID(pRow) = tDoc.m_iDocID;
+	DOCINFOSETID ( pRow, tDoc.m_iDocID );
 	for ( int i=0; i<m_iStride-DOCINFO_IDSIZE; i++ )
 		DOCINFO2ATTRS(pRow)[i] = tDoc.m_pRowitems[i];
 
@@ -1044,6 +1044,15 @@ void RtIndex_t::DeleteDocument ( SphDocID_t uDoc )
 }
 
 
+/// WARNING! static buffer, non-reenterable
+static const char * FormatMicrotime ( int64_t uTime )
+{
+	static char sBuf[32];
+	snprintf ( sBuf, sizeof(sBuf), "%d.%03d", int(uTime/1000000), int((uTime%1000000)/1000) );
+	return sBuf;
+}
+
+
 void RtIndex_t::DumpToDisk ( const char * sFilename )
 {
 	CSphString sName, sError;
@@ -1059,7 +1068,7 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 	wrDocs.PutBytes ( &bDummy, 1 );
 	wrHits.PutBytes ( &bDummy, 1 );
 
-	float tmStart = sphLongTimer ();
+	int64_t tmStart = sphMicroTimer();
 
 	while ( m_pSegments.GetLength()>1 )
 	{
@@ -1074,8 +1083,8 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 	}
 	RtSegment_t * pSeg = m_pSegments[0];
 
-	float tmMerged = sphLongTimer ();
-	printf ( "final merge done in %.2f sec\n", tmMerged-tmStart );
+	int64_t tmMerged = sphMicroTimer() ;
+	printf ( "final merge done in %s sec\n", FormatMicrotime ( tmMerged-tmStart ) );
 
 	SphWordID_t uLastWord = 0;
 	SphOffset_t uLastDocpos = 0;
@@ -1171,8 +1180,8 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 	wrDict.CloseFile ();
 	wrRows.CloseFile ();
 
-	float tmDump = sphLongTimer ();
-	printf ( "dump done in %.2f sec\n", tmDump-tmMerged );
+	int64_t tmDump = sphMicroTimer ();
+	printf ( "dump done in %s sec\n", FormatMicrotime ( tmDump-tmMerged ) );
 }
 
 //////////////////////////////////////////////////////////////////////////

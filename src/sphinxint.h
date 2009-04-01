@@ -14,8 +14,10 @@ public:
 					CSphWriter ();
 					~CSphWriter ();
 
+	void			SetBufferSize ( int iBufferSize );	///< tune write cache size; must be called before OpenFile() or SetFile()
+
 	bool			OpenFile ( const char * sName, CSphString & sErrorBuffer );
-	void			SetFile ( int iFD, SphOffset_t * pSharedOffset = NULL, int iWriteCacheSize = SPH_CACHE_WRITE );
+	void			SetFile ( int iFD, SphOffset_t * pSharedOffset );
 	void			CloseFile (); ///< note: calls Flush(), ie. IsError() might get true after this call
 
 	void			PutByte ( int uValue );

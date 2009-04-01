@@ -25,13 +25,14 @@ void SetupIndexing ( CSphSource_MySQL * pSrc, const CSphSourceParams_MySQL & tPa
 		sphDie ( "iterate-start failed: %s", sError.cstr() );
 }
 
+
 void DoIndexing ( CSphSource * pSrc, ISphRtIndex * pIndex )
 {
 	CSphString sError;
 
-	float tmStart = sphLongTimer ();
-	float tmAvgCommit = 0.0f;
-	float tmMaxCommit = 0.0f;
+	int64_t tmStart = sphMicroTimer ();
+	int64_t tmAvgCommit = 0;
+	int64_t tmMaxCommit = 0;
 	int iCommits = 0;
 	for ( ;; )
 	{
@@ -43,9 +44,9 @@ void DoIndexing ( CSphSource * pSrc, ISphRtIndex * pIndex )
 
 		if ( ( pSrc->GetStats().m_iTotalDocuments % COMMIT_STEP )==0 || !pSrc->m_tDocInfo.m_iDocID )
 		{
-			float tmCommit = sphLongTimer();
+			int64_t tmCommit = sphMicroTimer();
 			pIndex->Commit ();
-			tmCommit = sphLongTimer()-tmCommit;
+			tmCommit = sphMicroTimer()-tmCommit;
 
 			iCommits++;
 			tmAvgCommit += tmCommit;
@@ -64,13 +65,17 @@ void DoIndexing ( CSphSource * pSrc, ISphRtIndex * pIndex )
 
 	pSrc->Disconnect();
 
-	float tmEnd = sphLongTimer ();
+	int64_t tmEnd = sphMicroTimer ();
 	float fTotalMB = (float)pSrc->GetStats().m_iTotalBytes/1000000.0f;
-	printf ( "commit-step %d, %d docs, %d bytes, %.3f sec, %.2f MB/sec\n",
+	printf ( "commit-step %d, %d docs, %d bytes, %d.%03d sec, %.2f MB/sec\n",
 		COMMIT_STEP,
 		(int)pSrc->GetStats().m_iTotalDocuments,
-		(int)pSrc->GetStats().m_iTotalBytes, tmEnd-tmStart, fTotalMB/(tmEnd-tmStart) );
-	printf ( "commit-docs %d, avg %.2f msec, max %.2f msec\n", COMMIT_STEP, tmAvgCommit*1000, tmMaxCommit*1000 );
+		(int)pSrc->GetStats().m_iTotalBytes,
+		int((tmEnd-tmStart)/1000000), int(((tmEnd-tmStart)%1000000)/1000),
+		fTotalMB*1000000.0f/(tmEnd-tmStart) );
+	printf ( "commit-docs %d, avg %d.%3d msec, max %d.%3d msec\n", COMMIT_STEP,
+		int(tmAvgCommit/1000), int(tmAvgCommit%1000),
+		int(tmMaxCommit/1000), int(tmMaxCommit/1000) );
 	g_fTotalMB += fTotalMB;
 }
 
@@ -108,7 +113,7 @@ void main ()
 		sphDie ( "update-schema failed: %s", sError.cstr() );
 	ISphRtIndex * pIndex = sphCreateIndexRT ( tSchema );
 
-	float tmStart = sphLongTimer ();
+	int64_t tmStart = sphMicroTimer();
 	DoIndexing ( pSrc, pIndex );
 
 	// update
@@ -121,8 +126,10 @@ void main ()
 	pIndex->DumpToDisk ( "dump" );
 	printf ( "post-dump allocs=%d, bytes=%d\n", sphAllocsCount(), sphAllocBytes() );
 
-	float tmEnd = sphLongTimer();
-	printf ( "total with dump %.2f sec, %.2f MB/sec\n", tmEnd-tmStart, g_fTotalMB/(tmEnd-tmStart) );
+	int64_t tmEnd = sphMicroTimer();
+	printf ( "total with dump %d.%03d sec, %.2f MB/sec\n",
+		int((tmEnd-tmStart)/1000000), int(((tmEnd-tmStart)%1000000)/1000),
+		g_fTotalMB*1000000.0f/(tmEnd-tmStart) );
 
 #if SPH_ALLOCS_PROFILER
 	sphAllocsStats();

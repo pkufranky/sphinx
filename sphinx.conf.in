@@ -13,7 +13,7 @@
 source src1
 {
 	# data source type. mandatory, no default value
-	# known types are 'mysql', 'pgsql', 'mssql', 'xmlpipe', 'xmlpipe2'
+	# known types are mysql, pgsql, mssql, xmlpipe, xmlpipe2, odbc
 	type					= mysql
 
 	#####################################################################
@@ -58,6 +58,13 @@ source src1
 	# optional, default is 0 (request SBCS data)
 	#
 	# mssql_unicode			= 1 # request Unicode data from server
+
+
+	# ODBC specific DSN (data source name)
+	# mandatory for odbc source type, no default value
+	#
+	# odbc_dsn				= DBQ=C:\data;DefaultDir=C:\data;Driver={Microsoft Text Driver (*.txt; *.csv)};
+	# sql_query				= SELECT id, data FROM documents.csv
 
 
 	# pre-query, executed before the main fetch query
@@ -232,6 +239,13 @@ source src1
 	#
 	# xmlpipe_attr_timestamp	= published
 	# xmlpipe_attr_uint			= author_id
+
+
+	# perform UTF-8 validation, and filter out incorrect codes
+	# avoids XML parser choking on non-UTF-8 documents
+	# optional, default is 0
+	#
+	# xmlpipe_fixup_utf8		= 1
 }
 
 
@@ -534,6 +548,14 @@ indexer
 	# optional, default is 2M
 	#
 	# max_xmlpipe2_field	= 4M
+
+
+	# write buffer size, bytes
+	# several (currently up to 4) buffers will be allocated
+	# write buffers are allocated in addition to mem_limit
+	# optional, default is 1M
+	#
+	# write_buffer		= 1M
 }
 
 #############################################################################
@@ -630,6 +652,24 @@ searchd
 	# max allowed per-filter values count
 	# optional, default is 4096
 	max_filter_values	= 4096
+
+
+	# socket listen queue length
+	# optional, default is 5
+	#
+	# listen_backlog		= 5
+
+
+	# per-keyword read buffer size
+	# optional, default is 256K
+	#
+	# read_buffer			= 256K
+
+
+	# unhinted read size (currently used when reading hits)
+	# optional, default is 32K
+	#
+	# read_unhinted		= 32K
 }
 
 # --eof--

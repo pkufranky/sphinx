@@ -34,7 +34,7 @@ bool CreateSynonymsFile ( const char * sMagic )
 		"   AT & T => AT & T  \n"
 		"standarten fuehrer => Standartenfuehrer\n"
 		"standarten fuhrer  => Standartenfuehrer\n"
-		"OS/2 => OS/2\n" 
+		"OS/2 => OS/2\n"
 		"Ms-Dos => MS-DOS\n"
 		"MS DOS => MS-DOS\n"
 		"feat. => featuring\n"
@@ -65,7 +65,7 @@ ISphTokenizer * CreateTestTokenizer ( bool bUTF8, bool bSynonyms, bool bEscaped 
 		assert ( pTokenizer->LoadSynonyms ( g_sTmpfile, sError ) );
 
 	if ( bEscaped )
-	{	
+	{
 		ISphTokenizer * pOldTokenizer = pTokenizer;
 		pTokenizer = pTokenizer->Clone ( true );
 		SafeDelete ( pOldTokenizer );
@@ -77,7 +77,7 @@ ISphTokenizer * CreateTestTokenizer ( bool bUTF8, bool bSynonyms, bool bEscaped 
 
 void TestTokenizer ( bool bUTF8 )
 {
-	const char * sPrefix = bUTF8 
+	const char * sPrefix = bUTF8
 		? "testing UTF8 tokenizer"
 		: "testing SBCS tokenizer";
 
@@ -133,7 +133,7 @@ void TestTokenizer ( bool bUTF8 )
 			"3", "\\thephone",					"thephone",  NULL,
 			"3", "the\\!phone",					"the", "phone", NULL,
 			"3", "\\!phone",					"phone", NULL,
-			"3", "\\\\phone",					"phone", NULL,						// the correct behavior if '\' is not in charset 
+			"3", "\\\\phone",					"phone", NULL,						// the correct behavior if '\' is not in charset
 			"3", "pho\\\\ne",					"pho", "ne", NULL,
 			"3", "phon\\\\e",					"phon", NULL,
 			NULL
@@ -194,7 +194,7 @@ void TestTokenizer ( bool bUTF8 )
 		printf ( "%s for uberlong token handling\n", sPrefix );
 
 		const int UBERLONG = 4096;
-		char * sLine4 = new char [ UBERLONG+1 ]; 
+		char * sLine4 = new char [ UBERLONG+1 ];
 		memset ( sLine4, 'a', UBERLONG );
 		sLine4[UBERLONG] = '\0';
 
@@ -273,7 +273,7 @@ void TestTokenizer ( bool bUTF8 )
 
 		SafeDelete ( sLine4 );
 
-		// test boundaries 
+		// test boundaries
 		printf ( "%s for boundaries handling, run=%d\n", sPrefix, iRun );
 
 		CSphString sError;
@@ -333,18 +333,18 @@ void BenchTokenizer ( bool bUTF8 )
 		const int iPasses = 10;
 		int iTokens = 0;
 
-		float fTime = -sphLongTimer ();
+		int64_t tmTime = -sphMicroTimer();
 		for ( int iPass=0; iPass<iPasses; iPass++ )
 		{
 			pTokenizer->SetBuffer ( (BYTE*)sData, iData );
 			while ( pTokenizer->GetToken() ) iTokens++;
 		}
-		fTime += sphLongTimer ();
+		tmTime += sphMicroTimer();
 
 		iTokens /= iPasses;
-		fTime /= iPasses;
+		tmTime /= iPasses;
 
-		printf ( "run %d: %d bytes, %d tokens, %.3f ms, %.3f MB/sec\n", iRun, iData, iTokens, 1000.0f*fTime, iData/fTime/1000000.0f );
+		printf ( "run %d: %d bytes, %d tokens, %d.%03d ms, %.3f MB/sec\n", iRun, iData, iTokens, int(tmTime/1000), int(tmTime%1000), float(iData)/tmTime );
 		SafeDeleteArray ( sData );
 	}
 }
@@ -416,15 +416,16 @@ void BenchStripper ()
 			tStripper.SetRemovedElements ( "style, script", sError );
 
 		const int iPasses = 50;
-		float fTime = -sphLongTimer ();
+		int64_t tmTime = -sphMicroTimer();
 		for ( int iPass=0; iPass<iPasses; iPass++ )
 		{
 			tStripper.Strip ( (BYTE*)sBuf );
 			strcpy ( sBuf, sRef );
 		}
-		fTime += sphLongTimer ();
+		tmTime += sphMicroTimer();
 
-		printf ( "run %d: %d bytes, %.3f ms, %.3f MB/sec\n", iRun, iLen, 1000.0f*fTime/float(iPasses), iLen*float(iPasses)/fTime/1000000.0f );
+		tmTime /= iPasses;
+		printf ( "run %d: %d bytes, %d.%03d ms, %.3f MB/sec\n", iRun, iLen, int(tmTime/1000), int(tmTime%1000), float(iLen)/tmTime );
 	}
 
 	SafeDeleteArray ( sBuf );
@@ -452,7 +453,7 @@ void TestExpr ()
 		tMatch.m_pRowitems[i] = 1+i;
 
 	struct ExprTest_t
-	{ 
+	{
 		const char *	m_sExpr;
 		float			m_fValue;
 	};
@@ -492,7 +493,7 @@ void TestExpr ()
 		printf ( "testing expression evaluation, test %d/%d... ", 1+iTest, nTests );
 
 		CSphString sError;
-		CSphScopedPtr<ISphExpr> pExpr ( sphExprParse ( dTests[iTest].m_sExpr, tSchema, NULL, sError ) );
+		CSphScopedPtr<ISphExpr> pExpr ( sphExprParse ( dTests[iTest].m_sExpr, tSchema, NULL, NULL, sError ) );
 		if ( !pExpr.Ptr() )
 		{
 			printf ( "FAILED; %s\n", sError.cstr() );
@@ -564,7 +565,7 @@ void BenchExpr ()
 
 		DWORD uType;
 		CSphString sError;
-		CSphScopedPtr<ISphExpr> pExpr ( sphExprParse ( dBench[iRun].m_sExpr, tSchema, &uType, sError ) );
+		CSphScopedPtr<ISphExpr> pExpr ( sphExprParse ( dBench[iRun].m_sExpr, tSchema, &uType, NULL, sError ) );
 		if ( !pExpr.Ptr() )
 		{
 			printf ( "FAILED; %s\n", sError.cstr() );
@@ -574,28 +575,28 @@ void BenchExpr ()
 		const int NRUNS = 1000000;
 
 		volatile float fValue = 0.0f;
-		float fTime = sphLongTimer ();
+		int64_t tmTime = sphMicroTimer();
 		for ( int i=0; i<NRUNS; i++ ) fValue += pExpr->Eval(tMatch);
-		fTime = sphLongTimer() - fTime;
+		tmTime = sphMicroTimer() - tmTime;
 
-		float fTimeInt = sphLongTimer ();
+		int64_t tmTimeInt = sphMicroTimer();
 		if ( uType==SPH_ATTR_INTEGER )
 		{
 			int uValue = 0;
 			for ( int i=0; i<NRUNS; i++ ) uValue += pExpr->IntEval(tMatch);
 		}
-		fTimeInt = sphLongTimer() - fTimeInt;
+		tmTimeInt = sphMicroTimer() - tmTimeInt;
 
-		float fTimeNative = sphLongTimer ();
+		int64_t tmTimeNative = sphMicroTimer();
 		for ( int i=0; i<NRUNS; i++ ) fValue += dBench[iRun].m_pFunc ( tMatch );
-		fTimeNative = sphLongTimer() - fTimeNative;
+		tmTimeNative = sphMicroTimer() - tmTimeNative;
 
 		if ( uType==SPH_ATTR_INTEGER )
-			printf ( "int-eval %.1fM/sec, ", float(NRUNS)/float(1000000.0f)/fTimeInt );
+			printf ( "int-eval %.1fM/sec, ", float(NRUNS)/tmTimeInt );
 
 		printf ( "flt-eval %.1fM/sec, native %.1fM/sec\n",
-			float(NRUNS)/float(1000000.0f)/fTime,
-			float(NRUNS)/float(1000000.0f)/fTimeNative );
+			float(NRUNS)/tmTime,
+			float(NRUNS)/tmTimeNative );
 	}
 }
 
@@ -684,7 +685,12 @@ void TestQueryParser ()
 
 	CSphTokenizerSettings tTokenizerSetup;
 	tTokenizerSetup.m_iMinWordLen = 2;
+	tTokenizerSetup.m_sSynonymsFile = g_sTmpfile;
 	pTokenizer->Setup ( tTokenizerSetup );
+
+	CSphString sError;
+	assert ( CreateSynonymsFile ( NULL ) );
+	assert ( pTokenizer->LoadSynonyms ( g_sTmpfile, sError ) );
 
 	struct QueryTest_t
 	{
@@ -722,7 +728,8 @@ void TestQueryParser ()
 		{ "\"\"",												"" },
 		{ "\"()\"",												"" },
 		{ "\"]\"",												"" },
-		{ "@title hello @body -world",							"( ( @title: hello ) AND NOT ( @body: world ) )" }
+		{ "@title hello @body -world",							"( ( @title: hello ) AND NOT ( @body: world ) )" },
+		{ "Ms-Dos",							"MS-DOS" }
 	};
 
 
