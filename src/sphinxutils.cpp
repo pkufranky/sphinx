@@ -206,6 +206,10 @@ static KeyDesc_t g_dKeysIndex[] =
 	{ "min_stemming_len",		0, NULL },
 	{ "overshort_step",			0, NULL },
 	{ "stopword_step",			0, NULL },
+	{ "rt_field",				0, NULL },
+	{ "rt_attr_int",			0, NULL },
+	{ "rt_attr_bigint",			0, NULL },
+	{ "rt_attr_float",			0, NULL },
 	{ NULL,						0, NULL }
 };
 

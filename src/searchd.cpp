@@ -5873,6 +5873,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 
 		} else if ( eStmt==STMT_INSERT_INTO )
 		{
+			// get that index
 			if ( !g_hIndexes(tStmt.m_sInsertIndex) )
 			{
 				sError.SetSprintf ( "no such index '%s'", tStmt.m_sInsertIndex.cstr() );
@@ -5889,6 +5890,51 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 				continue;
 			}
 
+			// get schema, check values count
+			const CSphSchema * pSchema = pIndex->GetSchema();
+			if ( ( pSchema->m_dFields.GetLength()+pSchema->GetAttrsCount() )!=tStmt.m_dInsertValues.GetLength() )
+			{
+				SendMysqlErrorPacket ( tOut, uPacketID, "column count does not match value count" );
+				continue;
+			}
+
+			// convert strings to attrs
+			assert ( sError.IsEmpty() );
+			SphDocID_t uID = tStmt.m_tInsertDocinfo.m_iDocID; // reset will zero out that
+			tStmt.m_tInsertDocinfo.Reset ( pSchema->GetRowSize() );
+			tStmt.m_tInsertDocinfo.m_iDocID = uID;
+
+			int iAttrVal = pSchema->m_dFields.GetLength();
+			for ( int i=0; i<pSchema->GetAttrsCount() && sError.IsEmpty(); i++, iAttrVal++ )
+			{
+				const CSphColumnInfo & tCol = pSchema->GetAttr(i);
+				switch ( tCol.m_eAttrType )
+				{
+					case SPH_ATTR_INTEGER:
+						tStmt.m_tInsertDocinfo.SetAttr ( tCol.m_tLocator, strtoul ( tStmt.m_dInsertValues[iAttrVal].cstr(), NULL, 10 ) );
+						break;
+
+					case SPH_ATTR_BIGINT:
+						tStmt.m_tInsertDocinfo.SetAttr ( tCol.m_tLocator, strtoll ( tStmt.m_dInsertValues[iAttrVal].cstr(), NULL, 10 ) );
+						break;
+
+					case SPH_ATTR_FLOAT:
+						tStmt.m_tInsertDocinfo.SetAttrFloat ( tCol.m_tLocator, (float)strtod ( tStmt.m_dInsertValues[iAttrVal].cstr(), NULL ) );
+						break;
+
+					default:
+						sError.SetSprintf ( "internal error: unknown attribute type in INSERT (typeid=%d)", tCol.m_eAttrType );
+						break;
+				}
+			}
+			if ( !sError.IsEmpty() )
+			{
+				SendMysqlErrorPacket ( tOut, uPacketID, sError.cstr() );
+				continue;
+			}
+			tStmt.m_dInsertValues.Resize ( pSchema->m_dFields.GetLength() );
+
+			// do add
 			pIndex->AddDocument ( tStmt.m_dInsertValues, tStmt.m_tInsertDocinfo );
 			pIndex->Commit ();
 
@@ -6876,16 +6922,37 @@ ESphAddIndex AddIndex ( const char * szIndexName, const CSphConfigSection & hInd
 		// configure realtime index
 		////////////////////////////
 
-		/*!COMMIT*/
 		CSphSchema tSchema;
 		CSphColumnInfo tCol;
 
-		tCol.m_sName = "title";
-		tSchema.m_dFields.Add ( tCol );
+		// fields
+		for ( CSphVariant * v=hIndex("rt_field"); v; v=v->m_pNext )
+		{
+			tCol.m_sName = v->cstr();
+			tSchema.m_dFields.Add ( tCol );
+		}
+		if ( !tSchema.m_dFields.GetLength() )
+		{
+			sphWarning ( "index '%s': no fields configured (use rt_field directive)", szIndexName );
+			return ADD_ERROR;
+		}
 
-		tCol.m_sName = "content";
-		tSchema.m_dFields.Add ( tCol );
+		// attrs
+		const int iNumTypes = 3;
+		const char * sTypes[iNumTypes] = { "rt_attr_int", "rt_attr_bigint", "rt_attr_float" };
+		const int iTypes[iNumTypes] = { SPH_ATTR_INTEGER, SPH_ATTR_BIGINT, SPH_ATTR_FLOAT };
 
+		for ( int iType=0; iType<iNumTypes; iType++ )
+		{
+			for ( CSphVariant * v=hIndex(sTypes[iType]); v; v=v->m_pNext )
+			{
+				tCol.m_sName = v->cstr();
+				tCol.m_eAttrType = iTypes[iType];
+				tSchema.AddAttr ( tCol );
+			}
+		}
+
+		// index
 		ServedIndex_t tIdx;
 		tIdx.m_pIndex = sphCreateIndexRT ( tSchema );
 		tIdx.m_pSchema = tIdx.m_pIndex->GetSchema();

@@ -610,6 +610,9 @@ public:
 	virtual bool				QueryEx ( CSphQuery * pQuery, CSphQueryResult * pResult, ISphMatchSorter * pTop );
 	void						BindWeights ( const CSphQuery * pQuery );
 
+	void						CopyDocinfo ( CSphMatch & tMatch, const DWORD * pFound ) const;
+	const CSphRowitem *			FindDocinfo ( const RtSegment_t * pSeg, SphDocID_t uDocID ) const;
+
 protected:
 	CSphSourceStats				m_tStats;
 
@@ -706,8 +709,15 @@ void RtIndex_t::AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphD
 
 	CSphRowitem * pRow = &m_dAccumRows [ m_dAccumRows.GetLength() - m_iStride ];
 	DOCINFOSETID ( pRow, tDoc.m_iDocID );
-	for ( int i=0; i<m_iStride-DOCINFO_IDSIZE; i++ )
-		DOCINFO2ATTRS(pRow)[i] = tDoc.m_pRowitems[i];
+
+	int iToCopy = Min ( m_iStride-DOCINFO_IDSIZE, tDoc.m_iRowitems );
+	CSphRowitem * pAttrs = DOCINFO2ATTRS(pRow);
+
+	for ( int i=0; i<iToCopy; i++ )
+		pAttrs[i] = tDoc.m_pRowitems[i];
+
+	for ( int i=iToCopy; i<m_iStride-DOCINFO_IDSIZE; i++)
+		pAttrs[i] = 0;
 
 	// accumulate hits
 	ARRAY_FOREACH ( i, dHits )
@@ -1452,6 +1462,69 @@ bool RtIndex_t::EarlyReject ( CSphMatch & tMatch ) const
 }
 
 
+void RtIndex_t::CopyDocinfo ( CSphMatch & tMatch, const DWORD * pFound ) const
+{
+	if ( !pFound )
+		return;
+
+	// copy from storage
+	assert ( tMatch.m_pRowitems );
+	assert ( DOCINFO2ID(pFound)==tMatch.m_iDocID );
+	memcpy ( tMatch.m_pRowitems, DOCINFO2ATTRS(pFound), m_tSchema.GetRowSize()*sizeof(CSphRowitem) );
+}
+
+
+const CSphRowitem * RtIndex_t::FindDocinfo ( const RtSegment_t * pSeg, SphDocID_t uDocID ) const
+{
+	// FIXME! move to CSphIndex, and implement hashing
+	if ( pSeg->m_dRows.GetLength()==0 )
+		return NULL;
+
+	int iStride = m_iStride;
+	int iStart = 0;
+	int iEnd = pSeg->m_iRows;
+	assert ( iStride==( DOCINFO_IDSIZE + m_tSchema.GetRowSize() ) );
+
+	const CSphRowitem * pStorage = &pSeg->m_dRows[0];
+	const CSphRowitem * pFound = NULL;
+
+	if ( uDocID==DOCINFO2ID ( &pStorage [ iStart*iStride ] ) )
+	{
+		pFound = &pStorage [ iStart*iStride ];
+
+	} else if ( uDocID==DOCINFO2ID ( &pStorage [ iEnd*iStride ] ) )
+	{
+		pFound = &pStorage [ iEnd*iStride ];
+
+	} else
+	{
+		while ( iEnd-iStart>1 )
+		{
+			// check if nothing found
+			if (
+				uDocID < DOCINFO2ID ( &pStorage [ iStart*iStride ] ) ||
+				uDocID > DOCINFO2ID ( &pStorage [ iEnd*iStride ] ) )
+				break;
+			assert ( uDocID > DOCINFO2ID ( &pStorage [ iStart*iStride ] ) );
+			assert ( uDocID < DOCINFO2ID ( &pStorage [ iEnd*iStride ] ) );
+
+			int iMid = iStart + (iEnd-iStart)/2;
+			if ( uDocID==DOCINFO2ID ( &pStorage [ iMid*iStride ] ) )
+			{
+				pFound = &pStorage [ iMid*iStride ];
+				break;
+			}
+			if ( uDocID<DOCINFO2ID ( &pStorage [ iMid*iStride ] ) )
+				iEnd = iMid;
+			else
+				iStart = iMid;
+		}
+	}
+
+	return pFound;
+}
+
+
 bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int iSorters, ISphMatchSorter ** ppSorters )
 {
 	RLOCK ( this );
@@ -1477,6 +1550,7 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	tTermSetup.m_pDict = m_pDict;
 	tTermSetup.m_pIndex = this;
 	tTermSetup.m_eDocinfo = m_tSettings.m_eDocinfo;
+	tTermSetup.m_tMin.m_iRowitems = m_tSchema.GetRowSize();
 	tTermSetup.m_iToCalc = 0; /*!COMMIT pResult->m_tSchema.GetRowSize() - m_tSchema.GetRowSize(); */
 	if ( pQuery->m_uMaxQueryMsec>0 )
 		tTermSetup.m_iMaxTimer = sphMicroTimer() + pQuery->m_uMaxQueryMsec*1000; // max_query_time
@@ -1508,7 +1582,7 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 				break;
 			for ( int i=0; i<iMatches; i++ )
 			{
-				/*!COMMIT CopyDocinfo ( pMatch[i], FindDocinfo ( pMatch[i].m_iDocID ) );*/
+				CopyDocinfo ( pMatch[i], FindDocinfo ( m_pSegments[iSeg], pMatch[i].m_iDocID ) );
 				for ( int iSorter=0; iSorter<iSorters; iSorter++ )
 					ppSorters[iSorter]->Push ( pMatch[i] );
 			}
