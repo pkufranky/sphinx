@@ -20,11 +20,14 @@
 %token	TOK_BY
 %token	TOK_COUNT
 %token	TOK_DESC
+%token	TOK_DELETE
 %token	TOK_DISTINCT
 %token	TOK_FROM
 %token	TOK_GROUP
 %token	TOK_LIMIT
 %token	TOK_IN
+%token	TOK_INSERT
+%token	TOK_INTO
 %token	TOK_ID
 %token	TOK_MATCH
 %token	TOK_MAX
@@ -36,6 +39,7 @@
 %token	TOK_SHOW
 %token	TOK_STATUS
 %token	TOK_SUM
+%token	TOK_VALUES
 %token	TOK_WARNINGS
 %token	TOK_WEIGHT
 %token	TOK_WITHIN
@@ -56,6 +60,8 @@ statement:
 	| show_warnings
 	| show_status
 	| show_meta
+	| insert_into
+	| delete_from
 	;
 
 //////////////////////////////////////////////////////////////////////////
@@ -70,7 +76,7 @@ select_from:
 	opt_limit_clause
 	opt_option_clause
 		{
-			pParser->m_eStmt = STMT_SELECT;
+			pParser->m_pStmt->m_eStmt = STMT_SELECT;
 			pParser->m_pQuery->m_sIndexes.SetBinary ( pParser->m_pBuf+$4.m_iStart, $4.m_iEnd-$4.m_iStart );
 		}
 	;
@@ -345,15 +351,51 @@ arglist:
 //////////////////////////////////////////////////////////////////////////
 
 show_warnings:
-	TOK_SHOW TOK_WARNINGS		{ pParser->m_eStmt = STMT_SHOW_WARNINGS; }
+	TOK_SHOW TOK_WARNINGS		{ pParser->m_pStmt->m_eStmt = STMT_SHOW_WARNINGS; }
 	;
 
 show_status:
-	TOK_SHOW TOK_STATUS			{ pParser->m_eStmt = STMT_SHOW_STATUS; }
+	TOK_SHOW TOK_STATUS			{ pParser->m_pStmt->m_eStmt = STMT_SHOW_STATUS; }
 	;
 
 show_meta:
-	TOK_SHOW TOK_META			{ pParser->m_eStmt = STMT_SHOW_META; }
+	TOK_SHOW TOK_META			{ pParser->m_pStmt->m_eStmt = STMT_SHOW_META; }
+	;
+
+//////////////////////////////////////////////////////////////////////////
+
+insert_into:
+	TOK_INSERT TOK_INTO TOK_IDENT opt_insert_cols_list TOK_VALUES '(' TOK_CONST ',' insert_vals_list ')'
+		{
+			pParser->m_pStmt->m_eStmt = STMT_INSERT_INTO;
+			pParser->m_pStmt->m_sInsertIndex = $3.m_sValue;
+			pParser->m_pStmt->m_tInsertDocinfo.m_iDocID = $7.m_iValue;
+		}
+	;
+
+opt_insert_cols_list:
+	// empty
+	| '(' ident_list ')'
+	;
+
+insert_vals_list:
+	insert_val							{ pParser->m_pStmt->m_dInsertValues.Add ( $1.m_sValue ); }
+	| insert_vals_list ',' insert_val	{ pParser->m_pStmt->m_dInsertValues.Add ( $3.m_sValue ); }
+	;
+
+insert_val:
+	TOK_QUOTED_STRING
+	;
+
+//////////////////////////////////////////////////////////////////////////
+
+delete_from:
+	TOK_DELETE TOK_FROM TOK_IDENT TOK_WHERE TOK_ID '=' TOK_CONST
+		{
+			pParser->m_pStmt->m_eStmt = STMT_DELETE_FROM;
+			pParser->m_pStmt->m_sDeleteIndex = $3.m_sValue;
+			pParser->m_pStmt->m_iDeleteID = $7.m_iValue;
+		}
 	;
 
 %%

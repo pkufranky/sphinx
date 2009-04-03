@@ -692,6 +692,15 @@ public:
 		return sphBinarySearch ( m_pData, m_pData+m_iLength-1, tRef );
 	}
 
+	/// generic linear search
+	bool Contains ( T tRef ) const
+	{
+		for ( int i=0; i<m_iLength; i++ )
+			if ( m_pData[i]==tRef )
+				return true;
+		return false;
+	}
+
 	/// fill with given value
 	void Fill ( const T & rhs )
 	{

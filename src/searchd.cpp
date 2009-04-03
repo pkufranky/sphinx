@@ -14,6 +14,7 @@
 #include "sphinx.h"
 #include "sphinxutils.h"
 #include "sphinxexcerpt.h"
+#include "sphinxrt.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -97,7 +98,8 @@ enum ESphAddIndex
 {
 	ADD_ERROR	= 0,
 	ADD_LOCAL	= 1,
-	ADD_DISTR	= 2
+	ADD_DISTR	= 2,
+	ADD_RT		= 3
 };
 
 
@@ -4550,7 +4552,9 @@ enum SqlStmt_e
 	STMT_SELECT,
 	STMT_SHOW_WARNINGS,
 	STMT_SHOW_STATUS,
-	STMT_SHOW_META
+	STMT_SHOW_META,
+	STMT_INSERT_INTO,
+	STMT_DELETE_FROM
 };
 
 
@@ -4567,14 +4571,32 @@ struct SqlNode_t
 #define YYSTYPE SqlNode_t
 
 
+struct SqlStmt_t
+{
+	SqlStmt_e				m_eStmt;
+
+	// SELECT specific
+	CSphQuery *				m_pQuery;
+
+	// INSERT specific
+	CSphString				m_sInsertIndex;
+	CSphDocInfo				m_tInsertDocinfo;
+	CSphVector<CSphString>	m_dInsertValues;
+
+	// DELETE specific
+	CSphString				m_sDeleteIndex;
+	SphDocID_t				m_iDeleteID;
+};
+
+
 struct SqlParser_t
 {
 	const char *	m_pBuf;
 	const char *	m_pLastTokenStart;
 	CSphString *	m_pParseError;
 	CSphQuery *		m_pQuery;
-	SqlStmt_e		m_eStmt;
 	bool			m_bGotQuery;
+	SqlStmt_t *		m_pStmt;
 
 	bool			AddOption ( SqlNode_t tIdent, SqlNode_t tValue );
 	void			AddItem ( YYSTYPE * pExpr, YYSTYPE * pAlias, ESphAggrFunc eFunc=SPH_AGGR_NONE );
@@ -4689,15 +4711,20 @@ void SqlParser_t::AddItem ( YYSTYPE * pExpr, YYSTYPE * pAlias, ESphAggrFunc eFun
 }
 
 
-SqlStmt_e ParseSqlQuery ( const CSphString & sQuery, CSphQuery & tQuery, CSphString & sError )
+SqlStmt_e ParseSqlQuery ( const CSphString & sQuery, SqlStmt_t * pStmt, CSphString & sError )
 {
+	assert ( pStmt );
+	assert ( pStmt->m_pQuery );
+
 	SqlParser_t tParser;
 	tParser.m_pBuf = sQuery.cstr();
 	tParser.m_pLastTokenStart = NULL;
 	tParser.m_pParseError = &sError;
-	tParser.m_pQuery = &tQuery;
+	tParser.m_pQuery = pStmt->m_pQuery;
 	tParser.m_bGotQuery = false;
+	tParser.m_pStmt = pStmt;
 
+	CSphQuery & tQuery = *pStmt->m_pQuery;
 	tQuery.m_eMode = SPH_MATCH_EXTENDED2; // only new and shiny matching and sorting
 	tQuery.m_eSort = SPH_SORT_EXTENDED;
 	tQuery.m_sSortBy = "@weight desc"; // default order
@@ -4725,9 +4752,8 @@ SqlStmt_e ParseSqlQuery ( const CSphString & sQuery, CSphQuery & tQuery, CSphStr
 		tQuery.m_sGroupSortBy = tQuery.m_sOrderBy;
 
 	if ( iRes!=0 )
-		return STMT_PARSE_ERROR;
-	else
-		return tParser.m_eStmt;
+		pStmt->m_eStmt = STMT_PARSE_ERROR;
+	return pStmt->m_eStmt;
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -4757,7 +4783,10 @@ void HandleCommandQuery ( int iSock, int iVer, InputBuffer_c & tReq )
 	SearchHandler_c tHandler ( 1 );
 	CSphString sError;
 
-	SqlStmt_e eStmt = ParseSqlQuery ( sQuery, tHandler.m_dQueries[0], sError );
+	SqlStmt_t tStmt;
+	tStmt.m_pQuery = &tHandler.m_dQueries[0];
+
+	SqlStmt_e eStmt = ParseSqlQuery ( sQuery, &tStmt, sError );
 	if ( eStmt==STMT_PARSE_ERROR )
 	{
 		tReq.SendErrorReply ( "%s", sError.cstr() );
@@ -5641,7 +5670,9 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 		// parse SQL query
 		CSphString sError;
 		SearchHandler_c tHandler ( 1 );
-		SqlStmt_e eStmt = ParseSqlQuery ( sQuery, tHandler.m_dQueries[0], sError );
+		SqlStmt_t tStmt;
+		tStmt.m_pQuery = &tHandler.m_dQueries[0];
+		SqlStmt_e eStmt = ParseSqlQuery ( sQuery, &tStmt, sError );
 
 		// handle SQL query
 		if ( eStmt==STMT_PARSE_ERROR )
@@ -5839,6 +5870,54 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 
 			// cleanup
 			SendMysqlEofPacket ( tOut, uPacketID++, 0 );
+
+		} else if ( eStmt==STMT_INSERT_INTO )
+		{
+			if ( !g_hIndexes(tStmt.m_sInsertIndex) )
+			{
+				sError.SetSprintf ( "no such index '%s'", tStmt.m_sInsertIndex.cstr() );
+				SendMysqlErrorPacket ( tOut, uPacketID, sError.cstr() );
+				continue;
+			}
+
+			ServedIndex_t & tServed = g_hIndexes[tStmt.m_sInsertIndex];
+			ISphRtIndex * pIndex = dynamic_cast<ISphRtIndex*> ( tServed.m_pIndex );
+			if ( !pIndex)
+			{
+				sError.SetSprintf ( "index '%s' does not support INSERT", tStmt.m_sInsertIndex.cstr() );
+				SendMysqlErrorPacket ( tOut, uPacketID, sError.cstr() );
+				continue;
+			}
+
+			pIndex->AddDocument ( tStmt.m_dInsertValues, tStmt.m_tInsertDocinfo );
+			pIndex->Commit ();
+
+			tOut.SendBytes ( sOK, sizeof(sOK)-1 ); // FIXME? affected rows
+			continue;
+
+		} else if ( eStmt==STMT_DELETE_FROM )
+		{
+			if ( !g_hIndexes(tStmt.m_sDeleteIndex) )
+			{
+				sError.SetSprintf ( "no such index '%s'", tStmt.m_sDeleteIndex.cstr() );
+				SendMysqlErrorPacket ( tOut, uPacketID, sError.cstr() );
+				continue;
+			}
+
+			ServedIndex_t & tServed = g_hIndexes[tStmt.m_sDeleteIndex];
+			ISphRtIndex * pIndex = dynamic_cast<ISphRtIndex*> ( tServed.m_pIndex );
+			if ( !pIndex)
+			{
+				sError.SetSprintf ( "index '%s' does not support INSERT", tStmt.m_sDeleteIndex.cstr() );
+				SendMysqlErrorPacket ( tOut, uPacketID, sError.cstr() );
+				continue;
+			}
+
+			pIndex->DeleteDocument ( tStmt.m_iDeleteID );
+			pIndex->Commit ();
+
+			tOut.SendBytes ( sOK, sizeof(sOK)-1 ); // FIXME? affected rows
+			continue;
 
 		} else
 		{
@@ -6790,8 +6869,38 @@ ESphAddIndex AddIndex ( const char * szIndexName, const CSphConfigSection & hInd
 		}
 
 		return ADD_DISTR;
-	}
-	else
+
+	} else if ( hIndex("type") && hIndex["type"]=="rt" )
+	{
+		////////////////////////////
+		// configure realtime index
+		////////////////////////////
+
+		/*!COMMIT*/
+		CSphSchema tSchema;
+		CSphColumnInfo tCol;
+
+		tCol.m_sName = "title";
+		tSchema.m_dFields.Add ( tCol );
+
+		tCol.m_sName = "content";
+		tSchema.m_dFields.Add ( tCol );
+
+		ServedIndex_t tIdx;
+		tIdx.m_pIndex = sphCreateIndexRT ( tSchema );
+		tIdx.m_pSchema = tIdx.m_pIndex->GetSchema();
+		tIdx.m_bEnabled = true;
+
+		if ( !g_hIndexes.Add ( tIdx, szIndexName ) )
+		{
+			sphWarning ( "INTERNAL ERROR: index '%s': hash add failed - NOT SERVING", szIndexName );
+			return ADD_ERROR;
+		}
+
+		tIdx.Reset (); // so that the dtor wouln't delete everything
+		return ADD_RT;
+
+	} else
 	{
 		/////////////////////////
 		// configure local index

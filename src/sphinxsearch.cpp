@@ -82,12 +82,12 @@ public:
 	static ExtNode_i *			Create ( const XQKeyword_t & tWord, DWORD uFields, int iMaxFieldPos, const ISphQwordSetup & tSetup );
 	static ExtNode_i *			Create ( ISphQword * pQword, DWORD uFields, int iMaxFieldPos, const ISphQwordSetup & tSetup );
 
+	virtual void				Reset ( const ISphQwordSetup & tSetup ) = 0;
 	virtual const ExtDoc_t *	GetDocsChunk ( SphDocID_t * pMaxID ) = 0;
 	virtual const ExtHit_t *	GetHitsChunk ( const ExtDoc_t * pDocs, SphDocID_t uMaxID ) = 0;
 
 	virtual void				GetQwords ( ExtQwordsHash_t & hQwords ) = 0;
 	virtual void				SetQwordsIDF ( const ExtQwordsHash_t & hQwords ) = 0;
-
 	virtual bool				GotHitless () = 0;
 
 	void DebugIndent ( int iLevel )
@@ -147,8 +147,10 @@ public:
 									SafeDelete ( m_pQword );
 								}
 
+	virtual void				Reset ( const ISphQwordSetup & tSetup );
 	virtual const ExtDoc_t *	GetDocsChunk ( SphDocID_t * pMaxID );
 	virtual const ExtHit_t *	GetHitsChunk ( const ExtDoc_t * pDocs, SphDocID_t uMaxID );
+
 	virtual void				GetQwords ( ExtQwordsHash_t & hQwords );
 	virtual void				SetQwordsIDF ( const ExtQwordsHash_t & hQwords );
 	virtual bool				GotHitless () { return false; }
@@ -227,6 +229,8 @@ class ExtTwofer_c : public ExtNode_i
 public:
 								ExtTwofer_c ( ExtNode_i * pFirst, ExtNode_i * pSecond, const ISphQwordSetup & tSetup );
 								~ExtTwofer_c ();
+
+	virtual void				Reset ( const ISphQwordSetup & tSetup );
 	virtual void				GetQwords ( ExtQwordsHash_t & hQwords );
 	virtual void				SetQwordsIDF ( const ExtQwordsHash_t & hQwords );
 
@@ -293,6 +297,8 @@ class ExtPhrase_c : public ExtNode_i
 public:
 								ExtPhrase_c ( CSphVector<ISphQword *> & dQwords, const XQNode_t & tNode, const ISphQwordSetup & tSetup );
 								~ExtPhrase_c ();
+
+	virtual void				Reset ( const ISphQwordSetup & tSetup );
 	virtual const ExtDoc_t *	GetDocsChunk ( SphDocID_t * pMaxID );
 	virtual const ExtHit_t *	GetHitsChunk ( const ExtDoc_t * pDocs, SphDocID_t uMaxID );
 	virtual void				GetQwords ( ExtQwordsHash_t & hQwords );
@@ -351,6 +357,7 @@ public:
 								ExtQuorum_c ( CSphVector<ISphQword *> & dQwords, const XQNode_t & tNode, const ISphQwordSetup & tSetup );
 	virtual						~ExtQuorum_c ();
 
+	virtual void				Reset ( const ISphQwordSetup & tSetup );
 	virtual const ExtDoc_t *	GetDocsChunk ( SphDocID_t * pMaxID );
 	virtual const ExtHit_t *	GetHitsChunk ( const ExtDoc_t * pDocs, SphDocID_t uMaxID );
 
@@ -377,6 +384,7 @@ public:
 								ExtOrder_c ( const CSphVector<ExtNode_i *> & dChildren, const ISphQwordSetup & tSetup );
 								~ExtOrder_c ();
 
+	virtual void				Reset ( const ISphQwordSetup & tSetup );
 	virtual const ExtDoc_t *	GetDocsChunk ( SphDocID_t * pMaxID );
 	virtual const ExtHit_t *	GetHitsChunk ( const ExtDoc_t * pDocs, SphDocID_t uMaxID );
 	virtual void				GetQwords ( ExtQwordsHash_t & hQwords );
@@ -407,6 +415,7 @@ class ExtRanker_c : public ISphRanker
 public:
 								ExtRanker_c ( const XQNode_t * pRoot, const ISphQwordSetup & tSetup );
 	virtual						~ExtRanker_c () { SafeDelete ( m_pRoot ); }
+	virtual void				Reset ( const ISphQwordSetup & tSetup );
 
 	virtual CSphMatch *			GetMatchesBuffer () { return m_dMatches; }
 	virtual const ExtDoc_t *	GetFilteredDocs ();
@@ -684,6 +693,15 @@ ExtTerm_c::ExtTerm_c ( ISphQword * pQword, DWORD uFields, const ISphQwordSetup &
 	m_iMaxTimer = tSetup.m_iMaxTimer;
 
 	AllocDocinfo ( tSetup );
+}
+
+
+void ExtTerm_c::Reset ( const ISphQwordSetup & tSetup )
+{
+	m_pHitDoc = NULL;
+	m_uHitsOverFor = 0;
+	m_iMaxTimer = tSetup.m_iMaxTimer;
+	tSetup.m_pIndex->QwordSetup ( m_pQword, &tSetup );
 }
 
 
@@ -1195,6 +1213,12 @@ ExtTwofer_c::~ExtTwofer_c ()
 	SafeDelete ( m_pChildren[1] );
 }
 
+void ExtTwofer_c::Reset ( const ISphQwordSetup & tSetup )
+{
+	m_pChildren[0]->Reset ( tSetup );
+	m_pChildren[1]->Reset ( tSetup );
+}
+
 void ExtTwofer_c::GetQwords ( ExtQwordsHash_t & hQwords )
 {
 	m_pChildren[0]->GetQwords ( hQwords );
@@ -1639,6 +1663,13 @@ ExtPhrase_c::ExtPhrase_c ( CSphVector<ISphQword *> & dQwords, const XQNode_t & t
 ExtPhrase_c::~ExtPhrase_c ()
 {
 	SafeDelete ( m_pNode );
+}
+
+void ExtPhrase_c::Reset ( const ISphQwordSetup & tSetup )
+{
+	ARRAY_FOREACH ( i, m_dQposDelta )
+		m_dQposDelta[i] = -INT_MAX;
+	m_pNode->Reset ( tSetup );
 }
 
 const ExtDoc_t * ExtPhrase_c::GetDocsChunk ( SphDocID_t * pMaxID )
@@ -2234,6 +2265,34 @@ ExtQuorum_c::~ExtQuorum_c ()
 		SafeDelete ( m_dChildren[i] );
 }
 
+void ExtQuorum_c::Reset ( const ISphQwordSetup & tSetup )
+{
+	m_bDone = false;
+	ARRAY_FOREACH ( i, m_dChildren )
+	{
+		m_pCurDoc[i] = NULL;
+		m_pCurHit[i] = NULL;
+	}
+
+	m_uMask = 0;
+	m_uMaskEnd = m_dChildren.GetLength() - 1; /*!COMMIT*/
+/*
+	ARRAY_FOREACH ( i, dQwords )
+	{
+		int iValue = 1;
+		for ( int j = i + 1; j < dQwords.GetLength(); j++ )
+			if ( dQwords[i]->m_iWordID == dQwords[j]->m_iWordID )
+			{
+				iValue = 0;
+				break;
+			}
+			m_uMask |= iValue << i;
+	}
+*/
+	ARRAY_FOREACH ( i, m_dChildren )
+		m_dChildren[i]->Reset ( tSetup );
+}
+
 void ExtQuorum_c::GetQwords ( ExtQwordsHash_t & hQwords )
 {
 	ARRAY_FOREACH ( i, m_dChildren )
@@ -2434,6 +2493,18 @@ ExtOrder_c::ExtOrder_c ( const CSphVector<ExtNode_i *> & dChildren, const ISphQw
 	}
 
 	AllocDocinfo ( tSetup );
+}
+
+
+void ExtOrder_c::Reset ( const ISphQwordSetup & tSetup )
+{
+	ARRAY_FOREACH ( i, m_dChildren )
+	{
+		assert ( m_dChildren[i] );
+		m_dChildren[i]->Reset ( tSetup );
+		m_pDocs[i] = NULL;
+		m_pHits[i] = NULL;
+	}
 }
 
 
@@ -2775,6 +2846,12 @@ ExtRanker_c::ExtRanker_c ( const XQNode_t * pRoot, const ISphQwordSetup & tSetup
 	m_uMaxID = 0;
 	m_uQWords = 0;
 	m_pIndex = tSetup.m_pIndex;
+}
+
+
+void ExtRanker_c::Reset ( const ISphQwordSetup & tSetup )
+{
+	m_pRoot->Reset ( tSetup );
 }
 
 

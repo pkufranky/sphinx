@@ -26,6 +26,27 @@ void SetupIndexing ( CSphSource_MySQL * pSrc, const CSphSourceParams_MySQL & tPa
 }
 
 
+void DoSearch ( CSphIndex * pIndex )
+{
+	CSphQuery tQuery;
+	tQuery.m_sQuery = "@title cat";
+
+	printf ( "---\nsearching... " );
+	CSphQueryResult * pRes = pIndex->Query ( &tQuery );
+	if ( !pRes )
+	{
+		printf ( "NULL result; error=%s", pIndex->GetLastError().cstr() );
+	} else
+	{
+		printf ( "%d results found in %d.%03d sec!\n", pRes->m_dMatches.GetLength(), pRes->m_iQueryTime/1000, pRes->m_iQueryTime%1000 ); 
+		ARRAY_FOREACH ( i, pRes->m_dMatches )
+			printf ( "%d. id=" DOCID_FMT ", weight=%d\n", 1+i, pRes->m_dMatches[i].m_iDocID, pRes->m_dMatches[i].m_iWeight );
+		SafeDelete ( pRes );
+	}
+	printf ( "---\n" );
+}
+
+
 void DoIndexing ( CSphSource * pSrc, ISphRtIndex * pIndex )
 {
 	CSphString sError;
@@ -61,6 +82,14 @@ void DoIndexing ( CSphSource * pSrc, ISphRtIndex * pIndex )
 
 		if (!( pSrc->GetStats().m_iTotalDocuments % 100 ))
 			printf ( "%d docs\r", (int)pSrc->GetStats().m_iTotalDocuments );
+
+		static bool bOnce = true;
+		if ( iCommits*COMMIT_STEP>=5000 && bOnce )
+		{
+			printf ( "\n" );
+			DoSearch ( pIndex );
+			bOnce = false;
+		}
 	}
 
 	pSrc->Disconnect();
@@ -73,11 +102,12 @@ void DoIndexing ( CSphSource * pSrc, ISphRtIndex * pIndex )
 		(int)pSrc->GetStats().m_iTotalBytes,
 		int((tmEnd-tmStart)/1000000), int(((tmEnd-tmStart)%1000000)/1000),
 		fTotalMB*1000000.0f/(tmEnd-tmStart) );
-	printf ( "commit-docs %d, avg %d.%3d msec, max %d.%3d msec\n", COMMIT_STEP,
+	printf ( "commit-docs %d, avg %d.%03d msec, max %d.%03d msec\n", COMMIT_STEP,
 		int(tmAvgCommit/1000), int(tmAvgCommit%1000),
 		int(tmMaxCommit/1000), int(tmMaxCommit/1000) );
 	g_fTotalMB += fTotalMB;
 }
+
 
 void main ()
 {
@@ -111,15 +141,23 @@ void main ()
 	CSphSchema tSchema;
 	if ( !pSrc->UpdateSchema ( &tSchema, sError ) )
 		sphDie ( "update-schema failed: %s", sError.cstr() );
+
 	ISphRtIndex * pIndex = sphCreateIndexRT ( tSchema );
+	pIndex->SetTokenizer ( pTok ); // index will own them from now on
+	pIndex->SetDictionary ( pDict );
 
 	int64_t tmStart = sphMicroTimer();
 	DoIndexing ( pSrc, pIndex );
 
+#if 0
 	// update
 	tParams.m_sQuery = "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM rt2 WHERE id<=10000";
 	SetupIndexing ( pSrc, tParams );
 	DoIndexing ( pSrc, pIndex );
+#endif
+
+	// search
+	DoSearch ( pIndex );
 
 	// dump
 	printf ( "pre-dump allocs=%d, bytes=%d\n", sphAllocsCount(), sphAllocBytes() );
@@ -144,8 +182,6 @@ void main ()
 #endif
 
 	SafeDelete ( pIndex );
-	SafeDelete ( pDict );
-	SafeDelete ( pTok );
 }
 
 //

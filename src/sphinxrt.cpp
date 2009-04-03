@@ -5,6 +5,7 @@
 #include "sphinx.h"
 #include "sphinxint.h"
 #include "sphinxrt.h"
+#include "sphinxsearch.h"
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -465,6 +466,12 @@ struct RtHitReader_t
 	DWORD			m_iLeft;
 	DWORD			m_uLast;
 
+	RtHitReader_t ()
+		: m_pCur ( NULL )
+		, m_iLeft ( 0 )
+		, m_uLast ( 0 )
+	{}
+
 	explicit RtHitReader_t ( const RtSegment_t * pSeg, const RtDoc_t * pDoc )
 	{
 		m_pCur = &pSeg->m_dHits [ pDoc->m_uHit ];
@@ -482,6 +489,23 @@ struct RtHitReader_t
 		m_uLast += uValue;
 		m_iLeft--;
 		return m_uLast;
+	}
+};
+
+
+struct RtHitReader2_t : public RtHitReader_t
+{
+	const BYTE * m_pBase;
+
+	RtHitReader2_t ()
+		: m_pBase ( NULL )
+	{}
+
+	void Seek ( SphOffset_t uOff, int iHits )
+	{
+		m_pCur = m_pBase + uOff;
+		m_iLeft = iHits;
+		m_uLast = 0;
 	}
 };
 
@@ -527,13 +551,13 @@ private:
 
 	CSphVector<RtSegment_t*>	m_pSegments;
 
-	const CSphSchema			m_tSchema;
 	const int					m_iStride;
 
 public:
 	explicit					RtIndex_t ( const CSphSchema & tSchema );
 	virtual						~RtIndex_t ();
 
+	void						AddDocument ( const CSphVector<CSphString> & dFields, const CSphDocInfo & tDoc );
 	void						AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphDocInfo & tDoc );
 	void						DeleteDocument ( SphDocID_t uDoc );
 	void						Commit ();
@@ -546,14 +570,61 @@ private:
 	void						CopyDoc ( RtSegment_t * pSeg, RtDocWriter_t & tOutDoc, RtWord_t * pWord, const RtSegment_t * pSrc, const RtDoc_t * pDoc );
 
 	void						DumpToDisk ( const char * sFilename );
+
+public:
+#pragma warning(push,1)
+#pragma warning(disable:4100)
+	virtual SphAttr_t *			GetKillList () const			{ return NULL; }
+	virtual int					GetKillListSize () const		{ return 0; }
+
+	virtual int					Build ( const CSphVector<CSphSource*> & dSources, int iMemoryLimit, int iWriteBuffer ) { return 0; }
+	virtual bool				Merge ( CSphIndex * pSource, CSphVector<CSphFilterSettings> & dFilters, bool bMergeKillLists ) { return false; }
+
+	virtual const CSphSchema *	Prealloc ( bool bMlock, CSphString & sWarning ) { return &m_tSchema; }
+	virtual void				Dealloc () {}
+	virtual bool				Preread () { return true; }
+	virtual void				SetBase ( const char * sNewBase ) {}
+	virtual bool				Rename ( const char * sNewBase ) { return true; }
+	virtual bool				Lock () { return true; }
+	virtual void				Unlock () {}
+	virtual bool				Mlock () { return true; }
+
+	virtual int					UpdateAttributes ( const CSphAttrUpdate & tUpd ) { return -1; }
+	virtual bool				SaveAttributes () { return false; }
+
+	virtual void				DebugDumpHeader ( FILE * fp, const char * sHeaderName ) {}
+	virtual void				DebugDumpDocids ( FILE * fp ) {}
+	virtual void				DebugDumpHitlist ( FILE * fp, const char * sKeyword ) {}
+#pragma warning(pop)
+
+public:
+	virtual ISphQword *					QwordSpawn () const;
+	virtual bool						QwordSetup ( ISphQword * pQword, const ISphQwordSetup * pSetup ) const;
+	virtual bool						EarlyReject ( CSphMatch & ) const;
+	virtual const CSphSourceStats &		GetStats () const { return m_tStats; }
+
+	virtual bool				MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int iSorters, ISphMatchSorter ** ppSorters );
+	virtual bool				GetKeywords ( CSphVector <CSphKeywordInfo> & dKeywords, const char * szQuery, bool bGetStats );
+
+	virtual CSphQueryResult *	Query ( CSphQuery * pQuery );
+	virtual bool				QueryEx ( CSphQuery * pQuery, CSphQueryResult * pResult, ISphMatchSorter * pTop );
+	void						BindWeights ( const CSphQuery * pQuery );
+
+protected:
+	CSphSourceStats				m_tStats;
+
+	// searching-only, per-query
+	int							m_iWeights;						///< search query field weights count
+	int							m_dWeights [ SPH_MAX_FIELDS ];	///< search query field weights
 };
 
 
 RtIndex_t::RtIndex_t ( const CSphSchema & tSchema )
-	: m_iAccumDocs ( 0 )
-	, m_tSchema ( tSchema )
+	: ISphRtIndex ( "rtindex" )
+	, m_iAccumDocs ( 0 )
 	, m_iStride ( DOCINFO_IDSIZE + tSchema.GetRowSize() )
 {
+	m_tSchema = tSchema;
 	m_dAccum.Reserve ( 2*1024*1024 );
 }
 
@@ -562,6 +633,61 @@ RtIndex_t::~RtIndex_t ()
 {
 	ARRAY_FOREACH ( i, m_pSegments )
 		SafeDelete ( m_pSegments[i] );
+}
+
+
+class CSphSource_StringVector : public CSphSource_Document
+{
+public:
+	explicit			CSphSource_StringVector ( const CSphVector<CSphString> & dFields, const CSphSchema & tSchema );
+	virtual				~CSphSource_StringVector () {}
+
+	virtual bool		Connect ( CSphString & ) { return true; }
+	virtual void		Disconnect () {}
+
+	virtual bool		HasAttrsConfigured () { return false; }
+	virtual bool		IterateHitsStart ( CSphString & ) { return true; }
+
+	virtual bool		IterateMultivaluedStart ( int, CSphString & ) { return false; }
+	virtual bool		IterateMultivaluedNext () { return false; }
+
+	virtual bool		IterateFieldMVAStart ( int, CSphString & ) { return false; }
+	virtual bool		IterateFieldMVANext () { return false; }
+
+	virtual bool		IterateKillListStart ( CSphString & ) { return false; }
+	virtual bool		IterateKillListNext ( SphDocID_t & ) { return false; }
+
+	virtual BYTE **		NextDocument ( CSphString & ) { return &m_dFields[0]; }
+
+protected:
+	CSphVector<BYTE *>	m_dFields;
+};
+
+CSphSource_StringVector::CSphSource_StringVector ( const CSphVector<CSphString> & dFields, const CSphSchema & tSchema )
+	: CSphSource_Document ( "$stringvector" )
+{
+	m_tSchema = tSchema;
+
+	m_dFields.Resize ( 1+dFields.GetLength() );
+	ARRAY_FOREACH ( i, dFields )
+		m_dFields[i] = (BYTE*) dFields[i].cstr();
+	m_dFields [ dFields.GetLength() ] = NULL;
+}
+
+void RtIndex_t::AddDocument ( const CSphVector<CSphString> & dFields, const CSphDocInfo & tDoc )
+{
+	if ( !tDoc.m_iDocID )
+		return;
+
+	CSphSource_StringVector tSrc ( dFields, m_tSchema );
+	tSrc.SetTokenizer ( m_pTokenizer );
+	tSrc.SetDict ( m_pDict );
+
+	tSrc.m_tDocInfo = tDoc;
+	if ( !tSrc.IterateHitsNext ( m_sLastError ) )
+		return;
+
+	AddDocument ( tSrc.m_dHits, tDoc );
 }
 
 
@@ -999,6 +1125,8 @@ void RtIndex_t::Commit ()
 	if ( !m_dAccum.GetLength() )
 		return;
 
+	m_tStats.m_iTotalDocuments += m_iAccumDocs;
+
 	RtSegment_t * pNewSeg = CreateSegment();
 	assert ( pNewSeg->m_iRows );
 	assert ( pNewSeg->m_iAliveRows );
@@ -1182,6 +1310,294 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 
 	int64_t tmDump = sphMicroTimer ();
 	printf ( "dump done in %s sec\n", FormatMicrotime ( tmDump-tmMerged ) );
+}
+
+//////////////////////////////////////////////////////////////////////////
+// SEARCHING
+//////////////////////////////////////////////////////////////////////////
+
+struct RtQword_t : public ISphQword
+{
+	friend struct RtIndex_t;
+
+protected:
+	RtDocReader_t *		m_pDocReader;
+	CSphMatch			m_tMatch;
+
+	DWORD				m_uNextHit;
+	RtHitReader2_t		m_tHitReader;
+
+	RtSegment_t *		m_pSeg;
+
+public:
+	RtQword_t ()
+		: m_pDocReader ( NULL )
+		, m_uNextHit ( 0 )
+		, m_pSeg ( NULL )
+	{
+		m_tMatch.Reset ( 0 );
+	}
+
+	virtual const CSphMatch & GetNextDoc ( DWORD * )
+	{
+		for ( ;; )
+		{
+			const RtDoc_t * pDoc = m_pDocReader->UnzipDoc();
+			if ( !pDoc )
+			{
+				m_tMatch.m_iDocID = 0;
+				return m_tMatch;
+			}
+
+			if ( m_pSeg->m_dKlist.BinarySearch ( pDoc->m_uDocID ) )
+				continue;
+			if ( m_pSeg->m_dKlistAccum.Contains ( pDoc->m_uDocID ) )
+				continue;
+
+			m_tMatch.m_iDocID = pDoc->m_uDocID;
+			m_uFields = pDoc->m_uFields;
+			m_uMatchHits = pDoc->m_uHits;
+			m_iHitlistPos = (uint64_t(pDoc->m_uHits)<<32) + pDoc->m_uHit;
+			return m_tMatch;
+		}
+	}
+
+	virtual void SeekHitlist ( SphOffset_t uOff )
+	{
+		int iHits = int(uOff>>32);
+		if ( iHits==1 )
+		{
+			m_uNextHit = DWORD(uOff);
+		} else
+		{
+			m_uNextHit = 0;
+			m_tHitReader.Seek ( DWORD(uOff), iHits );
+		}
+	}
+
+	virtual DWORD GetNextHit ()
+	{
+		if ( m_uNextHit==0 )
+		{
+			return m_tHitReader.UnzipHit();
+
+		} else if ( m_uNextHit==0xffffffffUL )
+		{
+			return 0;
+
+		} else
+		{
+			DWORD uRes = m_uNextHit;
+			m_uNextHit = 0xffffffffUL;
+			return uRes;
+		}
+	}
+};
+
+
+struct RtQwordSetup_t : ISphQwordSetup
+{
+	RtSegment_t * m_pSeg;
+};
+
+
+ISphQword * RtIndex_t::QwordSpawn () const
+{
+	return new RtQword_t ();
+}
+
+
+bool RtIndex_t::QwordSetup ( ISphQword * pQword, const ISphQwordSetup * pSetup ) const
+{
+	RtQword_t * pMyWord = dynamic_cast<RtQword_t*> ( pQword );
+	if ( !pMyWord )
+		return false;
+
+	const RtQwordSetup_t * pMySetup = dynamic_cast<const RtQwordSetup_t*> ( pSetup );
+	if ( !pMySetup )
+		return false;
+
+	RtWordReader_t tReader ( pMySetup->m_pSeg );
+	for ( ;; )
+	{
+		const RtWord_t * pWord = tReader.UnzipWord();
+		if ( !pWord )
+			break;
+
+		if ( pWord->m_uWordID==pMyWord->m_iWordID )
+		{
+			pMyWord->m_iDocs = pWord->m_uDocs;
+			pMyWord->m_iHits = pWord->m_uHits;
+
+			SafeDelete ( pMyWord->m_pDocReader );
+			pMyWord->m_pDocReader = new RtDocReader_t ( pMySetup->m_pSeg, *pWord );
+
+			pMyWord->m_tHitReader.m_pBase = NULL;
+			if ( pMySetup->m_pSeg->m_dHits.GetLength() )
+				pMyWord->m_tHitReader.m_pBase = &pMySetup->m_pSeg->m_dHits[0];
+
+			pMyWord->m_pSeg = pMySetup->m_pSeg;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+
+bool RtIndex_t::EarlyReject ( CSphMatch & tMatch ) const
+{
+	/*!COMMIT*/
+	return false;
+}
+
+
+bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int iSorters, ISphMatchSorter ** ppSorters )
+{
+	RLOCK ( this );
+
+	/*!COMMIT*/
+	assert ( pQuery );
+	assert ( pResult );
+	assert ( ppSorters );
+
+	// empty index, empty result
+	if ( !m_pSegments.GetLength() )
+	{
+		pResult->m_iQueryTime = 0;
+		return true;
+	}
+
+	// start counting
+	pResult->m_iQueryTime = 0;
+	int64_t tmQueryStart = sphMicroTimer();
+
+	// setup search terms
+	RtQwordSetup_t tTermSetup;
+	tTermSetup.m_pDict = m_pDict;
+	tTermSetup.m_pIndex = this;
+	tTermSetup.m_eDocinfo = m_tSettings.m_eDocinfo;
+	tTermSetup.m_iToCalc = 0; /*!COMMIT pResult->m_tSchema.GetRowSize() - m_tSchema.GetRowSize(); */
+	if ( pQuery->m_uMaxQueryMsec>0 )
+		tTermSetup.m_iMaxTimer = sphMicroTimer() + pQuery->m_uMaxQueryMsec*1000; // max_query_time
+	tTermSetup.m_pWarning = &pResult->m_sWarning;
+	tTermSetup.m_pSeg = m_pSegments[0];
+
+	// bind weights
+	BindWeights ( pQuery );
+
+	// setup query
+	// must happen before index-level reject, in order to build proper keyword stats
+	CSphScopedPtr<ISphRanker> pRanker ( sphCreateRanker ( pQuery, pQuery->m_sQuery.cstr(), pResult, tTermSetup, m_sLastError ) );
+	if ( !pRanker.Ptr() )
+		return false;
+
+	ARRAY_FOREACH ( iSeg, m_pSegments )
+	{
+		if ( iSeg!=0 )
+		{
+			tTermSetup.m_pSeg = m_pSegments[iSeg];
+			pRanker->Reset ( tTermSetup );
+		}
+
+		CSphMatch * pMatch = pRanker->GetMatchesBuffer();
+		for ( ;; )
+		{
+			int iMatches = pRanker->GetMatches ( m_iWeights, m_dWeights );
+			if ( iMatches<=0 )
+				break;
+			for ( int i=0; i<iMatches; i++ )
+			{
+				/*!COMMIT CopyDocinfo ( pMatch[i], FindDocinfo ( pMatch[i].m_iDocID ) );*/
+				for ( int iSorter=0; iSorter<iSorters; iSorter++ )
+					ppSorters[iSorter]->Push ( pMatch[i] );
+			}
+		}
+	}
+
+	// query timer
+	pResult->m_iQueryTime = int( ( sphMicroTimer()-tmQueryStart )/1000 );
+	return true;
+}
+
+
+bool RtIndex_t::GetKeywords ( CSphVector <CSphKeywordInfo> & dKeywords, const char * szQuery, bool bGetStats )
+{
+	/*!COMMIT*/
+	return false;
+}
+
+//////////////////////////////////////////////////////////////////////////
+
+// FIXME! move to CSphIndex
+CSphQueryResult * RtIndex_t::Query ( CSphQuery * pQuery )
+{
+	// create sorter
+	CSphString sError;
+	ISphMatchSorter * pTop = sphCreateQueue ( pQuery, m_tSchema, sError );
+	if ( !pTop )
+	{
+		m_sLastError.SetSprintf ( "failed to create sorting queue: %s", sError.cstr() );
+		return NULL;
+	}
+
+	// create result
+	CSphQueryResult * pResult = new CSphQueryResult();
+
+	// run query
+	if ( QueryEx ( pQuery, pResult, pTop ) )
+	{
+		// convert results and return
+		pResult->m_dMatches.Reset ();
+		sphFlattenQueue ( pTop, pResult, 0 );
+	} else
+	{
+		SafeDelete ( pResult );
+	}
+
+	SafeDelete ( pTop );
+	return pResult;
+}
+
+
+// FIXME! move to CSphIndex
+bool RtIndex_t::QueryEx ( CSphQuery * pQuery, CSphQueryResult * pResult, ISphMatchSorter * pTop )
+{
+	bool bRes = MultiQuery ( pQuery, pResult, 1, &pTop );
+	pResult->m_iTotalMatches += bRes ? pTop->GetTotalCount () : 0;
+	pResult->m_tSchema = pTop->GetOutgoingSchema();
+	return bRes;
+}
+
+
+// FIXME! move to CSphIndex
+void RtIndex_t::BindWeights ( const CSphQuery * pQuery )
+{
+	const int MIN_WEIGHT = 1;
+
+	// defaults
+	m_iWeights = Min ( m_tSchema.m_dFields.GetLength(), SPH_MAX_FIELDS );
+	for ( int i=0; i<m_iWeights; i++ )
+		m_dWeights[i] = MIN_WEIGHT;
+
+	// name-bound weights
+	if ( pQuery->m_dFieldWeights.GetLength() )
+	{
+		ARRAY_FOREACH ( i, pQuery->m_dFieldWeights )
+		{
+			int j = m_tSchema.GetFieldIndex ( pQuery->m_dFieldWeights[i].m_sName.cstr() );
+			if ( j>=0 && j<SPH_MAX_FIELDS )
+				m_dWeights[j] = Max ( MIN_WEIGHT, pQuery->m_dFieldWeights[i].m_iValue );
+		}
+		return;
+	}
+
+	// order-bound weights
+	if ( pQuery->m_pWeights )
+	{
+		for ( int i=0; i<Min ( m_iWeights, pQuery->m_iWeights ); i++ )
+			m_dWeights[i] = Max ( MIN_WEIGHT, (int)pQuery->m_pWeights[i] );
+	}
 }
 
 //////////////////////////////////////////////////////////////////////////
