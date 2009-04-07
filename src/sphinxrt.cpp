@@ -572,8 +572,10 @@ private:
 	void						DumpToDisk ( const char * sFilename );
 
 public:
+#if USE_WINDOWS
 #pragma warning(push,1)
 #pragma warning(disable:4100)
+#endif
 	virtual SphAttr_t *			GetKillList () const			{ return NULL; }
 	virtual int					GetKillListSize () const		{ return 0; }
 
@@ -595,7 +597,9 @@ public:
 	virtual void				DebugDumpHeader ( FILE * fp, const char * sHeaderName ) {}
 	virtual void				DebugDumpDocids ( FILE * fp ) {}
 	virtual void				DebugDumpHitlist ( FILE * fp, const char * sKeyword ) {}
+#if USE_WINDOWS
 #pragma warning(pop)
+#endif
 
 public:
 	virtual ISphQword *					QwordSpawn () const;
@@ -1191,6 +1195,13 @@ static const char * FormatMicrotime ( int64_t uTime )
 }
 
 
+struct Checkpoint_t
+{
+	uint64_t m_uWord;
+	uint64_t m_uOffset;
+};
+
+
 void RtIndex_t::DumpToDisk ( const char * sFilename )
 {
 	CSphString sName, sError;
@@ -1230,13 +1241,7 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 	static const int WORDLIST_CHECKPOINT = 1024;
 	int iWords = 0;
 
-	struct Checkpoint_t
-	{
-		uint64_t m_uWord;
-		uint64_t m_uOffset;
-	};
 	CSphVector<Checkpoint_t> dCheckpoints;
-
 	RtWordReader_t tInWord ( pSeg );
 	for ( ;; )
 	{
