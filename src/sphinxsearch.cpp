@@ -2851,7 +2851,8 @@ ExtRanker_c::ExtRanker_c ( const XQNode_t * pRoot, const ISphQwordSetup & tSetup
 
 void ExtRanker_c::Reset ( const ISphQwordSetup & tSetup )
 {
-	m_pRoot->Reset ( tSetup );
+	if ( m_pRoot )
+		m_pRoot->Reset ( tSetup );
 }
 
 

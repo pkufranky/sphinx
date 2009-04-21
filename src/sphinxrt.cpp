@@ -1487,7 +1487,7 @@ const CSphRowitem * RtIndex_t::FindDocinfo ( const RtSegment_t * pSeg, SphDocID_
 
 	int iStride = m_iStride;
 	int iStart = 0;
-	int iEnd = pSeg->m_iRows;
+	int iEnd = pSeg->m_iRows-1;
 	assert ( iStride==( DOCINFO_IDSIZE + m_tSchema.GetRowSize() ) );
 
 	const CSphRowitem * pStorage = &pSeg->m_dRows[0];
