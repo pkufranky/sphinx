@@ -701,6 +701,8 @@ void ExtTerm_c::Reset ( const ISphQwordSetup & tSetup )
 	m_pHitDoc = NULL;
 	m_uHitsOverFor = 0;
 	m_iMaxTimer = tSetup.m_iMaxTimer;
+	//!COMMIT m_pQword also could contain fields like m_iHitlistPos which need to be reset.
+	// Look at trunk, rev. 1906
 	tSetup.m_pIndex->QwordSetup ( m_pQword, &tSetup );
 }
 
