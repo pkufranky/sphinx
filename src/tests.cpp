@@ -367,7 +367,12 @@ void TestStripper ()
 		{ "testing comm<!--comm-->ents", "", "", "testing comments" },
 		{ "&lt; &gt; &thetasym; &somethingverylong; &the", "", "", "< > \xCF\x91 &somethingverylong; &the" },
 		{ "testing <img src=\"g/smth.jpg\" alt=\"nice picture\" rel=anotherattr junk=throwaway>inline tags vs attr indexing", "img=alt,rel", "", "testing nice picture anotherattr inline tags vs attr indexing" },
-		{ "this <?php $code = \"must be stripped\"; ?> away", "", "", "this  away" }
+		{ "this <?php $code = \"must be stripped\"; ?> away", "", "", "this  away" },
+		{ "<a href=\"http://www.com\">content1</a>", "a=title", "", "content1" },
+		{ "<a href=\"http://www.com\" title=\"my test title\">content2</a>", "a=title", "", "my test title content2" },
+		{ "testing <img src=\"g/smth.jpg\" alt=\"nice picture\" rel=anotherattr junk=\"throwaway\">inline tags vs attr indexing", "img=alt,rel", "",  "testing nice picture anotherattr inline tags vs attr indexing" },
+		{ "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\"><html>test</html>", "", "", " test " },
+		{ "<!smth \"that>can<break\"><html>test</html>", "", "", " test " }
 	};
 
 	int nTests = (int)(sizeof(sTests)/sizeof(sTests[0]));
@@ -440,17 +445,18 @@ void TestExpr ()
 	tCol.m_eAttrType = SPH_ATTR_INTEGER;
 
 	CSphSchema tSchema;
-	tCol.m_sName = "aaa"; tSchema.AddAttr ( tCol );
-	tCol.m_sName = "bbb"; tSchema.AddAttr ( tCol );
-	tCol.m_sName = "ccc"; tSchema.AddAttr ( tCol );
+	tCol.m_sName = "aaa"; tSchema.AddAttr ( tCol, false );
+	tCol.m_sName = "bbb"; tSchema.AddAttr ( tCol, false );
+	tCol.m_sName = "ccc"; tSchema.AddAttr ( tCol, false );
+
+	CSphRowitem * pRow = new CSphRowitem [ tSchema.GetRowSize() ];
+	for ( int i=0; i<tSchema.GetRowSize(); i++ )
+		pRow[i] = 1+i;
 
 	CSphMatch tMatch;
 	tMatch.m_iDocID = 123;
 	tMatch.m_iWeight = 456;
-	tMatch.m_iRowitems = tSchema.GetRowSize();
-	tMatch.m_pRowitems = new CSphRowitem [ tMatch.m_iRowitems ];
-	for ( int i=0; i<tMatch.m_iRowitems; i++ )
-		tMatch.m_pRowitems[i] = 1+i;
+	tMatch.m_pStatic = pRow;
 
 	struct ExprTest_t
 	{
@@ -509,6 +515,8 @@ void TestExpr ()
 
 		printf ( "ok\n" );
 	}
+
+	SafeDeleteArray ( pRow );
 }
 
 
@@ -518,9 +526,9 @@ void TestExpr ()
 #define NOINLINE
 #endif
 
-#define AAA float(tMatch.m_pRowitems[0])
-#define BBB float(tMatch.m_pRowitems[1])
-#define CCC float(tMatch.m_pRowitems[2])
+#define AAA float(tMatch.m_pStatic[0])
+#define BBB float(tMatch.m_pStatic[1])
+#define CCC float(tMatch.m_pStatic[2])
 
 NOINLINE float ExprNative1 ( const CSphMatch & tMatch )	{ return AAA+BBB*CCC-1.0f;}
 NOINLINE float ExprNative2 ( const CSphMatch & tMatch )	{ return AAA+BBB*CCC*2.0f-3.0f/4.0f*5.0f/6.0f*BBB; }
@@ -535,17 +543,18 @@ void BenchExpr ()
 	tCol.m_eAttrType = SPH_ATTR_INTEGER;
 
 	CSphSchema tSchema;
-	tCol.m_sName = "aaa"; tSchema.AddAttr ( tCol );
-	tCol.m_sName = "bbb"; tSchema.AddAttr ( tCol );
-	tCol.m_sName = "ccc"; tSchema.AddAttr ( tCol );
+	tCol.m_sName = "aaa"; tSchema.AddAttr ( tCol, false );
+	tCol.m_sName = "bbb"; tSchema.AddAttr ( tCol, false );
+	tCol.m_sName = "ccc"; tSchema.AddAttr ( tCol, false );
+
+	CSphRowitem * pRow = new CSphRowitem [ tSchema.GetRowSize() ];
+	for ( int i=0; i<tSchema.GetRowSize(); i++ )
+		pRow[i] = 1+i;
 
 	CSphMatch tMatch;
 	tMatch.m_iDocID = 123;
 	tMatch.m_iWeight = 456;
-	tMatch.m_iRowitems = tSchema.GetRowSize();
-	tMatch.m_pRowitems = new CSphRowitem [ tMatch.m_iRowitems ];
-	for ( int i=0; i<tMatch.m_iRowitems; i++ )
-		tMatch.m_pRowitems[i] = 1+i;
+	tMatch.m_pStatic = pRow;
 
 	struct ExprBench_t
 	{
@@ -598,6 +607,8 @@ void BenchExpr ()
 			float(NRUNS)/tmTime,
 			float(NRUNS)/tmTimeNative );
 	}
+
+	SafeDeleteArray ( pRow );
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -648,7 +659,7 @@ CSphString ReconstructNode ( const XQNode_t * pNode, const CSphSchema & tSchema 
 			else
 			{
 				const char * sOp = "(unknown-op)";
-				switch ( pNode->m_eOp )
+				switch ( pNode->GetOp() )
 				{
 					case SPH_QUERY_AND:		sOp = "AND"; break;
 					case SPH_QUERY_OR:		sOp = "OR"; break;
@@ -750,6 +761,70 @@ void TestQueryParser ()
 
 //////////////////////////////////////////////////////////////////////////
 
+#ifndef NDEBUG
+void TestMisc ()
+{
+	BYTE dBuffer [ 128 ];
+	int dValues[] = { 16383, 0, 1, 127, 128, 129, 256, 4095, 4096, 4097, 8192, 16383, 16384, 16385, 123456, 4194303, -1 };
+
+	printf ( "testing string attr length packer/unpacker... " );
+
+	BYTE * pRow = dBuffer;
+	for ( int i=0; dValues[i]>=0; i++ )
+		pRow += sphPackStrlen ( pRow, dValues[i] );
+
+	const BYTE * pUnp = dBuffer;
+	for ( int i=0; dValues[i]>=0; i++ )
+	{
+		int iUnp = sphUnpackStr ( pUnp, &pUnp );
+		assert ( iUnp==dValues[i] );
+	}
+
+	printf ( "ok\n" );
+}
+#endif
+
+//////////////////////////////////////////////////////////////////////////
+
+void BenchLocators ()
+{
+	const int MAX_ITEMS = 10;
+	const int NUM_MATCHES = 1000;
+	const int NUM_RUNS = 100000;
+
+	CSphRowitem dStatic[MAX_ITEMS];
+	CSphRowitem dDynamic[MAX_ITEMS];
+	CSphAttrLocator tLoc[NUM_MATCHES];
+	CSphMatch tMatch[NUM_MATCHES];
+
+	for ( int i=0; i<MAX_ITEMS; i++ )
+		dStatic[i] = dDynamic[i] = i;
+
+	srand ( 0 );
+	for ( int i=0; i<NUM_MATCHES; i++)
+	{
+		tLoc[i].m_iBitCount = 32;
+		tLoc[i].m_iBitOffset = 32*( rand() % MAX_ITEMS );
+		tLoc[i].m_bDynamic = ( rand() % 2 )==1;
+		tMatch[i].m_pStatic = dStatic;
+		tMatch[i].m_pDynamic = dDynamic;
+	}
+
+	printf ( "benchmarking locators\n" );
+	for ( int iRun=1; iRun<=3; iRun++ )
+	{
+		uint64_t tmLoc = sphMicroTimer();
+		int iSum = 0;
+		for ( int i=0; i<NUM_RUNS; i++ )
+			for ( int j=0; j<NUM_MATCHES; j++ )
+				iSum += (int)tMatch[j].GetAttr ( tLoc[j] );
+		tmLoc = sphMicroTimer() - tmLoc;
+		printf ( "run %d: sum=%d time=%d.%d msec\n", iRun, iSum, (int)(tmLoc/1000), (int)((tmLoc%1000)/100) );
+	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+
 int main ()
 {
 	printf ( "RUNNING INTERNAL LIBSPHINX TESTS\n\n" );
@@ -759,12 +834,14 @@ int main ()
 	BenchTokenizer ( false );
 	BenchTokenizer ( true );
 	BenchExpr ();
+	BenchLocators ();
 #else
 	TestQueryParser ();
 	TestStripper ();
 	TestTokenizer ( false );
 	TestTokenizer ( true );
 	TestExpr ();
+	TestMisc ();
 #endif
 
 	unlink ( g_sTmpfile );

@@ -435,7 +435,7 @@ T * sphBinarySearch ( T * pStart, T * pEnd, T & tRef )
 
 /// generic vector
 /// (don't even ask why it's not std::vector)
-template < typename T > class CSphVector
+template < typename T, bool SWAP=false > class CSphVector
 {
 protected:
 	static const int MAGIC_INITIAL_LIMIT = 8;
@@ -550,6 +550,26 @@ public:
 		return m_pData[--m_iLength];
 	}
 
+private:
+	template < typename U, bool V > struct CopyImpl
+	{
+		static inline void DoCopy ( U * pNew, U * pData, int iLength )
+		{
+			for ( int i=0; i<iLength; i++ )
+				pNew[i] = pData[i];
+		}
+	};
+
+	template < typename U > struct CopyImpl<U,true>
+	{
+		static inline void DoCopy ( U * pNew, U * pData, int iLength )
+		{
+			for ( int i=0; i<iLength; i++ )
+				Swap ( pNew[i], pData[i] );
+		}
+	};
+
+public:
 	/// grow enough to hold that much entries, if needed, but do *not* change the length
 	void Reserve ( int iNewLimit )
 	{
@@ -568,9 +588,10 @@ public:
 		// FIXME! optimize for POD case
 		T * pNew = new T [ m_iLimit ];
 		__analysis_assume ( m_iLength<=m_iLimit );
-		for ( int i=0; i<m_iLength; i++ )
-			pNew[i] = m_pData[i];
+
+		CopyImpl<T,SWAP>::DoCopy ( pNew, m_pData, m_iLength );
 		delete [] m_pData;
+
 		m_pData = pNew;
 	}
 
@@ -1139,6 +1160,18 @@ public:
 		return strncmp ( m_sValue, sPrefix, strlen(sPrefix) )==0;
 	}
 
+	bool Ends ( const char * sPrefix ) const
+	{
+		if ( !m_sValue || !sPrefix )
+			return false;
+
+		int iVal = strlen ( m_sValue );
+		int iPrefix = strlen ( sPrefix );
+		if ( iVal<iPrefix )
+			return false;
+		return strncmp ( m_sValue+iVal-iPrefix, sPrefix, iPrefix )==0;
+	}
+
 	void Chop ()
 	{
 		if ( m_sValue )
@@ -1150,6 +1183,11 @@ public:
 			memmove ( m_sValue, sStart, sEnd-sStart+1 );
 			m_sValue [ sEnd-sStart+1 ] = '\0';
 		}
+	}
+
+	int Length () const
+	{
+		return m_sValue ? (int)strlen(m_sValue) : 0;
 	}
 };
 

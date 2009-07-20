@@ -10,7 +10,8 @@
 %error-verbose
 
 %token	TOK_IDENT
-%token	TOK_CONST
+%token	TOK_CONST_INT
+%token	TOK_CONST_FLOAT
 %token	TOK_QUOTED_STRING
 
 %token	TOK_AS
@@ -52,6 +53,31 @@
 %left '+' '-'
 %left '*' '/'
 %nonassoc TOK_NEG
+
+%{
+// some helpers
+#include <float.h> // for FLT_MAX
+
+static void AddFloatRangeFilter ( SqlParser_t * pParser, const CSphString & sAttr, float fMin, float fMax )
+{
+	CSphFilterSettings tFilter;
+	tFilter.m_sAttrName = sAttr;
+	tFilter.m_eType = SPH_FILTER_FLOATRANGE;
+	tFilter.m_fMinValue = fMin;
+	tFilter.m_fMaxValue = fMax;
+	pParser->m_pQuery->m_dFilters.Add ( tFilter );
+}
+
+static void AddUintRangeFilter ( SqlParser_t * pParser, const CSphString & sAttr, DWORD uMin, DWORD uMax )
+{
+	CSphFilterSettings tFilter;
+	tFilter.m_sAttrName = sAttr;
+	tFilter.m_eType = SPH_FILTER_RANGE;
+	tFilter.m_uMinValue = uMin;
+	tFilter.m_uMaxValue = uMax;
+	pParser->m_pQuery->m_dFilters.Add ( tFilter );
+}
+%}
 
 %%
 
@@ -141,7 +167,7 @@ where_item:
 				pParser->m_bGotQuery = true;
 			}
 		}
-	| TOK_IDENT '=' TOK_CONST
+	| TOK_IDENT '=' TOK_CONST_INT
 		{
 			CSphFilterSettings tFilter;
 			tFilter.m_sAttrName = $1.m_sValue;
@@ -149,7 +175,7 @@ where_item:
 			tFilter.m_dValues.Add ( $3.m_iValue );
 			pParser->m_pQuery->m_dFilters.Add ( tFilter );
 		}
-	| TOK_IDENT TOK_NE TOK_CONST
+	| TOK_IDENT TOK_NE TOK_CONST_INT
 		{
 			CSphFilterSettings tFilter;
 			tFilter.m_sAttrName = $1.m_sValue;
@@ -175,56 +201,51 @@ where_item:
 			tFilter.m_bExclude = true;
 			pParser->m_pQuery->m_dFilters.Add ( tFilter );
 		}
-	| TOK_IDENT TOK_BETWEEN TOK_CONST TOK_AND TOK_CONST
+	| TOK_IDENT TOK_BETWEEN TOK_CONST_INT TOK_AND TOK_CONST_INT
 		{
-			CSphFilterSettings tFilter;
-			tFilter.m_sAttrName = $1.m_sValue;
-			tFilter.m_eType = SPH_FILTER_RANGE;
-			tFilter.m_uMinValue = $3.m_iValue;
-			tFilter.m_uMaxValue = $5.m_iValue;
-			pParser->m_pQuery->m_dFilters.Add ( tFilter );
+			AddUintRangeFilter ( pParser, $1.m_sValue, $3.m_iValue, $5.m_iValue );
 		}
-	| TOK_IDENT '>' TOK_CONST
+	| TOK_IDENT '>' TOK_CONST_INT
 		{
-			CSphFilterSettings tFilter;
-			tFilter.m_sAttrName = $1.m_sValue;
-			tFilter.m_eType = SPH_FILTER_RANGE;
-			tFilter.m_uMinValue = $3.m_iValue + 1;
-			tFilter.m_uMaxValue = UINT_MAX;
-			pParser->m_pQuery->m_dFilters.Add ( tFilter );
+			AddUintRangeFilter ( pParser, $1.m_sValue, $3.m_iValue+1, UINT_MAX );
 		}
-	| TOK_IDENT '<' TOK_CONST
+	| TOK_IDENT '<' TOK_CONST_INT
 		{
-			CSphFilterSettings tFilter;
-			tFilter.m_sAttrName = $1.m_sValue;
-			tFilter.m_eType = SPH_FILTER_RANGE;
-			tFilter.m_uMinValue = 0;
-			tFilter.m_uMaxValue = $3.m_iValue - 1;
-			pParser->m_pQuery->m_dFilters.Add ( tFilter );
+			AddUintRangeFilter ( pParser, $1.m_sValue, 0, $3.m_iValue-1 );
 		}
-	| TOK_IDENT TOK_GTE TOK_CONST
+	| TOK_IDENT TOK_GTE TOK_CONST_INT
 		{
-			CSphFilterSettings tFilter;
-			tFilter.m_sAttrName = $1.m_sValue;
-			tFilter.m_eType = SPH_FILTER_RANGE;
-			tFilter.m_uMinValue = $3.m_iValue;
-			tFilter.m_uMaxValue = UINT_MAX;
-			pParser->m_pQuery->m_dFilters.Add ( tFilter );
+			AddUintRangeFilter ( pParser, $1.m_sValue, $3.m_iValue, UINT_MAX );
 		}
-	| TOK_IDENT TOK_LTE TOK_CONST
+	| TOK_IDENT TOK_LTE TOK_CONST_INT
 		{
-			CSphFilterSettings tFilter;
-			tFilter.m_sAttrName = $1.m_sValue;
-			tFilter.m_eType = SPH_FILTER_RANGE;
-			tFilter.m_uMinValue = 0;
-			tFilter.m_uMaxValue = $3.m_iValue;
-			pParser->m_pQuery->m_dFilters.Add ( tFilter );
+			AddUintRangeFilter ( pParser, $1.m_sValue, 0, $3.m_iValue );
+		}
+	| TOK_IDENT '=' TOK_CONST_FLOAT
+	| TOK_IDENT TOK_NE TOK_CONST_FLOAT
+	| TOK_IDENT '>' TOK_CONST_FLOAT
+	| TOK_IDENT '<' TOK_CONST_FLOAT
+		{
+			yyerror ( pParser, "only >=, <=, and BETWEEN floating-point filter types are supported in this version" );
+			YYERROR;
+		}
+	| TOK_IDENT TOK_BETWEEN TOK_CONST_FLOAT TOK_AND TOK_CONST_FLOAT
+		{
+			AddFloatRangeFilter ( pParser, $1.m_sValue, $3.m_fValue, $5.m_fValue );
+		}
+	| TOK_IDENT TOK_GTE TOK_CONST_FLOAT
+		{
+			AddFloatRangeFilter ( pParser, $1.m_sValue, $3.m_fValue, FLT_MAX );
+		}
+	| TOK_IDENT TOK_LTE TOK_CONST_FLOAT
+		{
+			AddFloatRangeFilter ( pParser, $1.m_sValue, -FLT_MAX, $3.m_fValue );
 		}
 	;
 
 const_list:
-	TOK_CONST							{ $$.m_dValues.Add ( $1.m_iValue ); }
-	| const_list ',' TOK_CONST			{ $$.m_dValues.Add ( $3.m_iValue ); }
+	TOK_CONST_INT							{ $$.m_dValues.Add ( $1.m_iValue ); }
+	| const_list ',' TOK_CONST_INT			{ $$.m_dValues.Add ( $3.m_iValue ); }
 	;
 
 opt_group_clause:
@@ -281,12 +302,12 @@ opt_limit_clause:
 	;
 
 limit_clause:
-	TOK_LIMIT TOK_CONST
+	TOK_LIMIT TOK_CONST_INT
 		{
 			pParser->m_pQuery->m_iOffset = 0;
 			pParser->m_pQuery->m_iLimit = $2.m_iValue;
 		}
-	| TOK_LIMIT TOK_CONST ',' TOK_CONST
+	| TOK_LIMIT TOK_CONST_INT ',' TOK_CONST_INT
 		{
 			pParser->m_pQuery->m_iOffset = $2.m_iValue;
 			pParser->m_pQuery->m_iLimit = $4.m_iValue;
@@ -308,15 +329,16 @@ option_list:
 	;
 
 option_item:
-	TOK_IDENT '=' TOK_IDENT		{ if ( !pParser->AddOption ( $1, $3 ) ) YYERROR; }
-	| TOK_IDENT '=' TOK_CONST	{ if ( !pParser->AddOption ( $1, $3 ) ) YYERROR; }
+	TOK_IDENT '=' TOK_IDENT			{ if ( !pParser->AddOption ( $1, $3 ) ) YYERROR; }
+	| TOK_IDENT '=' TOK_CONST_INT	{ if ( !pParser->AddOption ( $1, $3 ) ) YYERROR; }
 	;
 
 //////////////////////////////////////////////////////////////////////////
 
 expr:
 	TOK_IDENT
-	| TOK_CONST
+	| TOK_CONST_INT
+	| TOK_CONST_FLOAT
 	| '-' expr %prec TOK_NEG	{ $$ = $1; $$.m_iEnd = $2.m_iEnd; }
 	| TOK_NOT expr				{ $$ = $1; $$.m_iEnd = $2.m_iEnd; }
 	| expr '+' expr				{ $$ = $1; $$.m_iEnd = $3.m_iEnd; }
@@ -365,7 +387,7 @@ show_meta:
 //////////////////////////////////////////////////////////////////////////
 
 insert_into:
-	TOK_INSERT TOK_INTO TOK_IDENT opt_insert_cols_list TOK_VALUES '(' TOK_CONST ',' insert_vals_list ')'
+	TOK_INSERT TOK_INTO TOK_IDENT opt_insert_cols_list TOK_VALUES '(' TOK_CONST_INT ',' insert_vals_list ')'
 		{
 			pParser->m_pStmt->m_eStmt = STMT_INSERT_INTO;
 			pParser->m_pStmt->m_sInsertIndex = $3.m_sValue;
@@ -390,7 +412,7 @@ insert_val:
 //////////////////////////////////////////////////////////////////////////
 
 delete_from:
-	TOK_DELETE TOK_FROM TOK_IDENT TOK_WHERE TOK_ID '=' TOK_CONST
+	TOK_DELETE TOK_FROM TOK_IDENT TOK_WHERE TOK_ID '=' TOK_CONST_INT
 		{
 			pParser->m_pStmt->m_eStmt = STMT_DELETE_FROM;
 			pParser->m_pStmt->m_sDeleteIndex = $3.m_sValue;

@@ -16,6 +16,7 @@
 import sys
 import select
 import socket
+import re
 from struct import *
 
 
@@ -52,6 +53,11 @@ SPH_RANK_PROXIMITY_BM25	= 0 # default mode, phrase proximity major factor and BM
 SPH_RANK_BM25			= 1 # statistical mode, BM25 ranking only (faster but worse quality)
 SPH_RANK_NONE			= 2 # no ranking, all matches get a weight of 1
 SPH_RANK_WORDCOUNT		= 3 # simple word-count weighting, rank is a weighted sum of per-field keyword occurence counts
+SPH_RANK_PROXIMITY		= 4
+SPH_RANK_MATCHANY		= 5
+SPH_RANK_FIELDMASK		= 6
+SPH_RANK_SPH04			= 7
+SPH_RANK_TOTAL			= 8
 
 # known sort modes
 SPH_SORT_RELEVANCE		= 0
@@ -291,7 +297,7 @@ class SphinxClient:
 		"""
 		Set ranking mode.
 		"""
-		assert(ranker in [SPH_RANK_PROXIMITY_BM25, SPH_RANK_BM25, SPH_RANK_NONE, SPH_RANK_WORDCOUNT])
+		assert(ranker>=0 and ranker<SPH_RANK_TOTAL)
 		self._ranker = ranker
 
 
@@ -747,6 +753,7 @@ class SphinxClient:
 		if opts.get('single_passage'):	flags |= 4
 		if opts.get('use_boundaries'):	flags |= 8
 		if opts.get('weight_order'):	flags |= 16
+		if opts.get('query_mode'):		flags |= 32
 		
 		# mode=0, flags
 		req = [pack('>2L', 0, flags)]
@@ -953,6 +960,9 @@ class SphinxClient:
 		self._socket.close()
 		self._socket = None
 	
+	def EscapeString(self, string):
+		return re.sub(r"([=\(\)|\-!@~\"&/\\\^\$\=])", r"\\\1", string)
+
 #
 # $Id$
 #

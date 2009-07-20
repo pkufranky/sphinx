@@ -18,7 +18,7 @@ public:
 
 	bool			OpenFile ( const char * sName, CSphString & sErrorBuffer );
 	void			SetFile ( int iFD, SphOffset_t * pSharedOffset );
-	void			CloseFile (); ///< note: calls Flush(), ie. IsError() might get true after this call
+	void			CloseFile ( bool bTruncate = false );	///< note: calls Flush(), ie. IsError() might get true after this call
 
 	void			PutByte ( int uValue );
 	void			PutBytes ( const void * pData, int iSize );
@@ -26,7 +26,7 @@ public:
 	void			PutOffset ( SphOffset_t uValue ) { PutBytes ( &uValue, sizeof(SphOffset_t) ); }
 	void			PutString ( const char * szString );
 
-	void			SeekTo ( SphOffset_t pos );
+	void			SeekTo ( SphOffset_t pos ); ///< seeking inside the buffer will truncate it
 
 #if USE_64BIT
 	void			PutDocid ( SphDocID_t uValue ) { PutOffset ( uValue ); }

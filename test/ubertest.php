@@ -4,46 +4,8 @@
 // $Id$
 //
 
-$sd_address 		= "localhost";
-$sd_port 			= 6712;
-$sd_log				= "searchd.log";
-$sd_query_log		= "query.log";
-$sd_read_timeout	= 5;
-$sd_max_children	= 30;
-$sd_pid_file		= "searchd.pid";
-$sd_max_matches		=  100000;
-
-$db_host			= "localhost";
-$db_user			= "root";
-$db_pwd				= "";
-$db_name			= "test";
-$db_port			= 3306;
-
-$agent_address		= "localhost";
-$agent_port			= 6713;
-
-$agents 			= array ( array ( "address" => $sd_address, "port" => $sd_port ),
-							  array ( "address" => $agent_address, "port" => $agent_port ) );
-
-$index_data_path	= "data";
-
-$g_model			= false;
-$g_id64				= false;
-$g_strict			= false;
-
-require_once ( "helpers.inc" );
-
-if ( $windows )
-{
-	$indexer_path = "..\\bin\\debug\\indexer";
-	$searchd_path = "..\\bin\\debug\\searchd";
-}
-else
-{
-	$indexer_path = "../src/indexer";
-	$searchd_path = "../src/searchd";
-}
-
+require_once ( "settings.inc" );
+$sd_managed_searchd	= false;
 //////////////////////
 // parse command line
 //////////////////////
@@ -63,6 +25,7 @@ if ( !is_array($args) || empty($args) )
 	print ( "-i, --indexer <PATH>\tpath to indexer\n" );
 	print ( "-s, --searchd <PATH>\tpath to searchd\n" );
 	print ( "--strict\t\tterminate on the first failure (for automatic runs)\n" );
+	print ( "--managed\t\tdon't run searchd during test (for debugging)\n" );
 	print ( "\nEnvironment vriables are:\n" );
 	print ( "DBUSER\tuse 'USER' as MySQL user\n" );
 	print ( "DBPASS\tuse 'PASS' as MySQL password\n" );
@@ -74,11 +37,13 @@ if ( !is_array($args) || empty($args) )
 	exit ( 0 );
 }
 
+$locals = array();
+
 if ( array_key_exists ( "DBUSER", $_ENV ) && $_ENV["DBUSER"] )
-	$db_user = $_ENV["DBUSER"];
+	$locals['db-user'] = $_ENV["DBUSER"];
 
 if ( array_key_exists ( "DBPASS", $_ENV ) && $_ENV["DBPASS"] ) 
-	$db_pwd = $_ENV["DBPASS"];
+	$locals['db-password'] = $_ENV["DBPASS"];
 
 $run = false;
 $test_dirs = array();
@@ -89,10 +54,11 @@ for ( $i=0; $i<count($args); $i++ )
 	if ( false );
 	else if ( $arg=="g" || $arg=="gen" )			{ $g_model = true; $run = true; }
 	else if ( $arg=="t" || $arg=="test" )			{ $g_model = false; $run = true; }
-	else if ( $arg=="-u" || $arg=="--user" )		$db_user = $args[++$i];
-	else if ( $arg=="-p" || $arg=="--password" )	$db_pwd = $args[++$i];
-	else if ( $arg=="-i" || $arg=="--indexer" )		$indexer_path = $args[++$i];
-	else if ( $arg=="-s" || $arg=="--searchd" )		$searchd_path = $args[++$i];
+	else if ( $arg=="--managed" )					$sd_managed_searchd = true;
+	else if ( $arg=="-u" || $arg=="--user" )		$locals['db-user'] = $args[++$i];
+	else if ( $arg=="-p" || $arg=="--password" )	$locals['db-password'] = $args[++$i];
+	else if ( $arg=="-i" || $arg=="--indexer" )		$locals['indexer'] = $args[++$i];
+	else if ( $arg=="-s" || $arg=="--searchd" )		$locals['searchd'] = $args[++$i];
 	else if ( is_dir($arg) )						$test_dirs[] = $arg;
 	else if ( is_dir("test_$arg") )					$test_dirs[] = "test_$arg";
 	else if ( $arg=="--strict" )					$g_strict = true;
@@ -108,16 +74,10 @@ if ( !$run )
 	exit ( 1 );
 }
 
-// guess the size of document IDs
+PublishLocals ( $locals, false );
+GuessIdSize();
 
-exec ( $indexer_path, $output, $result );
-if ( count($output) == 0 )
-{
-	print "ERROR: failed to run the indexer\n";
-	exit ( 1 );
-}
-else
-	$g_id64 = strstr ( $output[0], 'id64' ) !== false;
+require_once ( "helpers.inc" );
 
 /////////////
 // run tests
@@ -151,7 +111,7 @@ $total_subtests = 0;
 $total_subtests_failed = 0;
 foreach ( $tests as $test )
 {
-	if ( $windows )
+	if ( $windows && !$sd_managed_searchd )
 	{
 		// avoid an issue with daemons stuck in exit(0) for some seconds
 		$sd_port += 10;

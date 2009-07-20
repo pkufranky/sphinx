@@ -557,8 +557,8 @@ public:
 	explicit					RtIndex_t ( const CSphSchema & tSchema );
 	virtual						~RtIndex_t ();
 
-	void						AddDocument ( const CSphVector<CSphString> & dFields, const CSphDocInfo & tDoc );
-	void						AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphDocInfo & tDoc );
+	void						AddDocument ( const CSphVector<CSphString> & dFields, const CSphMatch & tDoc );
+	void						AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphMatch & tDoc );
 	void						DeleteDocument ( SphDocID_t uDoc );
 	void						Commit ();
 
@@ -602,16 +602,13 @@ public:
 #endif
 
 public:
-	virtual ISphQword *					QwordSpawn () const;
-	virtual bool						QwordSetup ( ISphQword * pQword, const ISphQwordSetup * pSetup ) const;
 	virtual bool						EarlyReject ( CSphMatch & ) const;
 	virtual const CSphSourceStats &		GetStats () const { return m_tStats; }
 
 	virtual bool				MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int iSorters, ISphMatchSorter ** ppSorters );
+	virtual bool				MultiQueryEx ( int iQueries, CSphQuery * ppQueries, CSphQueryResult ** ppResults, ISphMatchSorter ** ppSorters);
 	virtual bool				GetKeywords ( CSphVector <CSphKeywordInfo> & dKeywords, const char * szQuery, bool bGetStats );
 
-	virtual CSphQueryResult *	Query ( CSphQuery * pQuery );
-	virtual bool				QueryEx ( CSphQuery * pQuery, CSphQueryResult * pResult, ISphMatchSorter * pTop );
 	void						BindWeights ( const CSphQuery * pQuery );
 
 	void						CopyDocinfo ( CSphMatch & tMatch, const DWORD * pFound ) const;
@@ -633,6 +630,12 @@ RtIndex_t::RtIndex_t ( const CSphSchema & tSchema )
 {
 	m_tSchema = tSchema;
 	m_dAccum.Reserve ( 2*1024*1024 );
+
+#ifndef NDEBUG
+	// check that index cols are static
+	for ( int i=0; i<m_tSchema.GetAttrsCount(); i++ )
+		assert ( !m_tSchema.GetAttr(i).m_tLocator.m_bDynamic );
+#endif
 }
 
 
@@ -681,7 +684,7 @@ CSphSource_StringVector::CSphSource_StringVector ( const CSphVector<CSphString> 
 	m_dFields [ dFields.GetLength() ] = NULL;
 }
 
-void RtIndex_t::AddDocument ( const CSphVector<CSphString> & dFields, const CSphDocInfo & tDoc )
+void RtIndex_t::AddDocument ( const CSphVector<CSphString> & dFields, const CSphMatch & tDoc )
 {
 	if ( !tDoc.m_iDocID )
 		return;
@@ -690,7 +693,7 @@ void RtIndex_t::AddDocument ( const CSphVector<CSphString> & dFields, const CSph
 	tSrc.SetTokenizer ( m_pTokenizer );
 	tSrc.SetDict ( m_pDict );
 
-	tSrc.m_tDocInfo = tDoc;
+	tSrc.m_tDocInfo.Clone ( tDoc, m_tSchema.GetRowSize() );
 	if ( !tSrc.IterateHitsNext ( m_sLastError ) )
 		return;
 
@@ -698,7 +701,7 @@ void RtIndex_t::AddDocument ( const CSphVector<CSphString> & dFields, const CSph
 }
 
 
-void RtIndex_t::AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphDocInfo & tDoc )
+void RtIndex_t::AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphMatch & tDoc )
 {
 	// kill existing copies
 	DeleteDocument ( tDoc.m_iDocID );
@@ -707,18 +710,20 @@ void RtIndex_t::AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphD
 	if ( !dHits.GetLength() )
 		return;
 
-	// accumulate row data
-	assert ( DOCINFO_IDSIZE + tDoc.m_iRowitems == m_iStride );
-	m_dAccumRows.Resize ( m_dAccumRows.GetLength() + m_iStride );
+	// accumulate row data; expect fully dynamic rows
+	assert ( !tDoc.m_pStatic );
+	assert (!( !tDoc.m_pDynamic && m_tSchema.GetRowSize()!=0 ));
+	assert (!( tDoc.m_pDynamic && (int)tDoc.m_pDynamic[-1]!=m_tSchema.GetRowSize() ));
 
+	m_dAccumRows.Resize ( m_dAccumRows.GetLength() + m_iStride );
 	CSphRowitem * pRow = &m_dAccumRows [ m_dAccumRows.GetLength() - m_iStride ];
 	DOCINFOSETID ( pRow, tDoc.m_iDocID );
 
-	int iToCopy = Min ( m_iStride-DOCINFO_IDSIZE, tDoc.m_iRowitems );
+	int iToCopy = m_iStride-DOCINFO_IDSIZE;
 	CSphRowitem * pAttrs = DOCINFO2ATTRS(pRow);
 
 	for ( int i=0; i<iToCopy; i++ )
-		pAttrs[i] = tDoc.m_pRowitems[i];
+		pAttrs[i] = tDoc.m_pDynamic[i];
 
 	for ( int i=iToCopy; i<m_iStride-DOCINFO_IDSIZE; i++)
 		pAttrs[i] = 0;
@@ -1334,6 +1339,7 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 struct RtQword_t : public ISphQword
 {
 	friend struct RtIndex_t;
+	friend struct RtQwordSetup_t;
 
 protected:
 	RtDocReader_t *		m_pDocReader;
@@ -1412,27 +1418,26 @@ public:
 
 struct RtQwordSetup_t : ISphQwordSetup
 {
-	RtSegment_t * m_pSeg;
+	RtSegment_t *		m_pSeg;
+
+	virtual ISphQword *	QwordSpawn ( const XQKeyword_t & ) const;
+	virtual bool		QwordSetup ( ISphQword * pQword ) const;
 };
 
 
-ISphQword * RtIndex_t::QwordSpawn () const
+ISphQword * RtQwordSetup_t::QwordSpawn ( const XQKeyword_t & tKeyword ) const
 {
 	return new RtQword_t ();
 }
 
 
-bool RtIndex_t::QwordSetup ( ISphQword * pQword, const ISphQwordSetup * pSetup ) const
+bool RtQwordSetup_t::QwordSetup ( ISphQword * pQword ) const
 {
 	RtQword_t * pMyWord = dynamic_cast<RtQword_t*> ( pQword );
 	if ( !pMyWord )
 		return false;
 
-	const RtQwordSetup_t * pMySetup = dynamic_cast<const RtQwordSetup_t*> ( pSetup );
-	if ( !pMySetup )
-		return false;
-
-	RtWordReader_t tReader ( pMySetup->m_pSeg );
+	RtWordReader_t tReader ( m_pSeg );
 	for ( ;; )
 	{
 		const RtWord_t * pWord = tReader.UnzipWord();
@@ -1445,13 +1450,13 @@ bool RtIndex_t::QwordSetup ( ISphQword * pQword, const ISphQwordSetup * pSetup )
 			pMyWord->m_iHits = pWord->m_uHits;
 
 			SafeDelete ( pMyWord->m_pDocReader );
-			pMyWord->m_pDocReader = new RtDocReader_t ( pMySetup->m_pSeg, *pWord );
+			pMyWord->m_pDocReader = new RtDocReader_t ( m_pSeg, *pWord );
 
 			pMyWord->m_tHitReader.m_pBase = NULL;
-			if ( pMySetup->m_pSeg->m_dHits.GetLength() )
-				pMyWord->m_tHitReader.m_pBase = &pMySetup->m_pSeg->m_dHits[0];
+			if ( m_pSeg->m_dHits.GetLength() )
+				pMyWord->m_tHitReader.m_pBase = &m_pSeg->m_dHits[0];
 
-			pMyWord->m_pSeg = pMySetup->m_pSeg;
+			pMyWord->m_pSeg = m_pSeg;
 			return true;
 		}
 	}
@@ -1472,10 +1477,9 @@ void RtIndex_t::CopyDocinfo ( CSphMatch & tMatch, const DWORD * pFound ) const
 	if ( !pFound )
 		return;
 
-	// copy from storage
-	assert ( tMatch.m_pRowitems );
+	// setup static pointer
 	assert ( DOCINFO2ID(pFound)==tMatch.m_iDocID );
-	memcpy ( tMatch.m_pRowitems, DOCINFO2ATTRS(pFound), m_tSchema.GetRowSize()*sizeof(CSphRowitem) );
+	tMatch.m_pStatic = DOCINFO2ATTRS(pFound);
 }
 
 
@@ -1555,8 +1559,6 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	tTermSetup.m_pDict = m_pDict;
 	tTermSetup.m_pIndex = this;
 	tTermSetup.m_eDocinfo = m_tSettings.m_eDocinfo;
-	tTermSetup.m_tMin.m_iRowitems = m_tSchema.GetRowSize();
-	tTermSetup.m_iToCalc = 0; /*!COMMIT pResult->m_tSchema.GetRowSize() - m_tSchema.GetRowSize(); */
 	if ( pQuery->m_uMaxQueryMsec>0 )
 		tTermSetup.m_iMaxTimer = sphMicroTimer() + pQuery->m_uMaxQueryMsec*1000; // max_query_time
 	tTermSetup.m_pWarning = &pResult->m_sWarning;
@@ -1565,9 +1567,17 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	// bind weights
 	BindWeights ( pQuery );
 
+	// parse query
+	XQQuery_t tParsed;
+	if ( !sphParseExtendedQuery ( tParsed, pQuery->m_sQuery.cstr(), GetTokenizer(), GetSchema(), m_pDict ) )
+	{
+		m_sLastError = tParsed.m_sParseError;
+		return false;
+	}
+
 	// setup query
 	// must happen before index-level reject, in order to build proper keyword stats
-	CSphScopedPtr<ISphRanker> pRanker ( sphCreateRanker ( pQuery, pQuery->m_sQuery.cstr(), pResult, tTermSetup, m_sLastError ) );
+	CSphScopedPtr<ISphRanker> pRanker ( sphCreateRanker ( tParsed.m_pRoot, pQuery->m_eRanker, pResult, tTermSetup ) );
 	if ( !pRanker.Ptr() )
 		return false;
 
@@ -1599,6 +1609,11 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	return true;
 }
 
+bool RtIndex_t::MultiQueryEx ( int iQueries, CSphQuery * ppQueries, CSphQueryResult ** ppResults, ISphMatchSorter ** ppSorters)
+{
+	/*!COMMIT*/
+	return false;
+}
 
 bool RtIndex_t::GetKeywords ( CSphVector <CSphKeywordInfo> & dKeywords, const char * szQuery, bool bGetStats )
 {
@@ -1607,47 +1622,6 @@ bool RtIndex_t::GetKeywords ( CSphVector <CSphKeywordInfo> & dKeywords, const ch
 }
 
 //////////////////////////////////////////////////////////////////////////
-
-// FIXME! move to CSphIndex
-CSphQueryResult * RtIndex_t::Query ( CSphQuery * pQuery )
-{
-	// create sorter
-	CSphString sError;
-	ISphMatchSorter * pTop = sphCreateQueue ( pQuery, m_tSchema, sError );
-	if ( !pTop )
-	{
-		m_sLastError.SetSprintf ( "failed to create sorting queue: %s", sError.cstr() );
-		return NULL;
-	}
-
-	// create result
-	CSphQueryResult * pResult = new CSphQueryResult();
-
-	// run query
-	if ( QueryEx ( pQuery, pResult, pTop ) )
-	{
-		// convert results and return
-		pResult->m_dMatches.Reset ();
-		sphFlattenQueue ( pTop, pResult, 0 );
-	} else
-	{
-		SafeDelete ( pResult );
-	}
-
-	SafeDelete ( pTop );
-	return pResult;
-}
-
-
-// FIXME! move to CSphIndex
-bool RtIndex_t::QueryEx ( CSphQuery * pQuery, CSphQueryResult * pResult, ISphMatchSorter * pTop )
-{
-	bool bRes = MultiQuery ( pQuery, pResult, 1, &pTop );
-	pResult->m_iTotalMatches += bRes ? pTop->GetTotalCount () : 0;
-	pResult->m_tSchema = pTop->GetOutgoingSchema();
-	return bRes;
-}
-
 
 // FIXME! move to CSphIndex
 void RtIndex_t::BindWeights ( const CSphQuery * pQuery )

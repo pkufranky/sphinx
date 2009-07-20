@@ -28,21 +28,30 @@ void SetupIndexing ( CSphSource_MySQL * pSrc, const CSphSourceParams_MySQL & tPa
 
 void DoSearch ( CSphIndex * pIndex )
 {
+	printf ( "---\nsearching... " );
+
 	CSphQuery tQuery;
+	CSphQueryResult tResult;
 	tQuery.m_sQuery = "@title cat";
 
-	printf ( "---\nsearching... " );
-	CSphQueryResult * pRes = pIndex->Query ( &tQuery );
-	if ( !pRes )
+	ISphMatchSorter * pSorter = sphCreateQueue ( &tQuery, *pIndex->GetSchema(), tResult.m_sError, false );
+	if ( !pSorter )
 	{
-		printf ( "NULL result; error=%s", pIndex->GetLastError().cstr() );
+		printf ( "failed to create sorter; error=%s", tResult.m_sError.cstr() );
+
+	} else if ( !pIndex->MultiQuery ( &tQuery, &tResult, 1, &pSorter ) )
+	{
+		printf ( "query failed; error=%s", pIndex->GetLastError().cstr() );
+
 	} else
 	{
-		printf ( "%d results found in %d.%03d sec!\n", pRes->m_dMatches.GetLength(), pRes->m_iQueryTime/1000, pRes->m_iQueryTime%1000 ); 
-		ARRAY_FOREACH ( i, pRes->m_dMatches )
-			printf ( "%d. id=" DOCID_FMT ", weight=%d\n", 1+i, pRes->m_dMatches[i].m_iDocID, pRes->m_dMatches[i].m_iWeight );
-		SafeDelete ( pRes );
+		sphFlattenQueue ( pSorter, &tResult, 0 );
+		printf ( "%d results found in %d.%03d sec!\n", tResult.m_dMatches.GetLength(), tResult.m_iQueryTime/1000, tResult.m_iQueryTime%1000 ); 
+		ARRAY_FOREACH ( i, tResult.m_dMatches )
+			printf ( "%d. id=" DOCID_FMT ", weight=%d\n", 1+i, tResult.m_dMatches[i].m_iDocID, tResult.m_dMatches[i].m_iWeight );
 	}
+
+	SafeDelete ( pSorter );
 	printf ( "---\n" );
 }
 
@@ -138,9 +147,14 @@ void main ()
 	// initial indexing
 	SetupIndexing ( pSrc, tParams );
 
-	CSphSchema tSchema;
-	if ( !pSrc->UpdateSchema ( &tSchema, sError ) )
+	CSphSchema tSrcSchema;
+	if ( !pSrc->UpdateSchema ( &tSrcSchema, sError ) )
 		sphDie ( "update-schema failed: %s", sError.cstr() );
+
+	CSphSchema tSchema; // source schema must be all dynamic attrs; but index ones must be static
+	tSchema.m_dFields = tSrcSchema.m_dFields;
+	for ( int i=0; i<tSrcSchema.GetAttrsCount(); i++ )
+		tSchema.AddAttr ( tSrcSchema.GetAttr(i), false );
 
 	ISphRtIndex * pIndex = sphCreateIndexRT ( tSchema );
 	pIndex->SetTokenizer ( pTok ); // index will own them from now on

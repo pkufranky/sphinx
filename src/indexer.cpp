@@ -42,8 +42,8 @@ int				g_iMemLimit				= 0;
 int				g_iMaxXmlpipe2Field		= 0;
 int				g_iWriteBuffer			= 0;
 
-const int		EXT_COUNT = 7;
-const char *	g_dExt[EXT_COUNT] = { "sph", "spa", "spi", "spd", "spp", "spm", "spk" };
+const int		EXT_COUNT = 8;
+const char *	g_dExt[EXT_COUNT] = { "sph", "spa", "spi", "spd", "spp", "spm", "spk", "sps" };
 
 /////////////////////////////////////////////////////////////////////////////
 
@@ -266,34 +266,9 @@ void ShowProgress ( const CSphIndexProgress * pProgress, bool bPhaseEnd )
 	// if in no-progress mode, only show phase ends
 	if ( g_bQuiet || ( !g_bProgress && !bPhaseEnd ) )
 		return;
-
-	switch ( pProgress->m_ePhase )
-	{
-		case CSphIndexProgress::PHASE_COLLECT:
-			fprintf ( stdout, "collected %d docs, %.1f MB", pProgress->m_iDocuments, float(pProgress->m_iBytes)/1000000.0f );
-			break;
-
-		case CSphIndexProgress::PHASE_SORT:
-			fprintf ( stdout, "sorted %.1f Mhits, %.1f%% done", float(pProgress->m_iHits)/1000000,
-				100.0f*float(pProgress->m_iHits) / float(pProgress->m_iHitsTotal) );
-			break;
-
-		case CSphIndexProgress::PHASE_COLLECT_MVA:
-			fprintf ( stdout, "collected %"PRIu64" attr values", pProgress->m_iAttrs );
-			break;
-
-		case CSphIndexProgress::PHASE_SORT_MVA:
-			fprintf ( stdout, "sorted %.1f Mvalues, %.1f%% done", float(pProgress->m_iAttrs)/1000000,
-				100.0f*float(pProgress->m_iAttrs) / float(pProgress->m_iAttrsTotal) );
-			break;
-
-		case CSphIndexProgress::PHASE_MERGE:
-			fprintf ( stdout, "merged %.1f Kwords", float(pProgress->m_iWords)/1000 );
-			break;
-	}
-
-	fprintf ( stdout, bPhaseEnd ? "\n" : "\r" );
-	fflush ( stdout );
+	
+	fprintf ( stdout, "%s%c", pProgress->BuildMessage(), bPhaseEnd ? '\n' : '\r' );
+ 	fflush ( stdout );
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -399,7 +374,7 @@ bool ParseMultiAttr ( const char * sBuf, CSphColumnInfo & tAttr, const char * sS
 		_arg.Add ( pVal->cstr() );
 
 
-void SqlAttrsConfigure ( CSphSourceParams_SQL & tParams, const CSphVariant * pHead, DWORD uAttrType, const char * sSourceName )
+void SqlAttrsConfigure ( CSphSourceParams_SQL & tParams, const CSphVariant * pHead, DWORD uAttrType, const char * sSourceName, bool bIndexedAttr=false )
 {
 	for ( const CSphVariant * pCur = pHead; pCur; pCur= pCur->m_pNext )
 	{
@@ -427,6 +402,8 @@ void SqlAttrsConfigure ( CSphSourceParams_SQL & tParams, const CSphVariant * pHe
 			}
 		}
 		tParams.m_dAttrs.Add ( tCol );
+		if ( bIndexedAttr )
+			tParams.m_dAttrs.Last().m_bIndexed = true;
 	}
 }
 
@@ -455,6 +432,82 @@ bool ConfigureUnpack ( CSphVariant * pHead, ESphUnpackFormat, CSphSourceParams_S
 	return true;
 }
 #endif // USE_ZLIB
+
+
+bool ParseJoinedField ( const char * sBuf, CSphJoinedField * pField, const char * sSourceName )
+{
+	// sanity checks
+	assert ( pField );
+	if ( !sBuf || !sBuf[0] )
+	{
+		fprintf ( stdout, "ERROR: source '%s': sql_joined_field must not be empty.\n", sSourceName );
+		return false;
+	}
+
+#define LOC_ERR(_exp) \
+	{ \
+		fprintf ( stdout, "ERROR: source '%s': expected " _exp " in sql_joined_field, got '%s'.\n", sSourceName, sBuf ); \
+		return false; \
+	}
+
+	// parse field name
+	while ( isspace(*sBuf) )
+		sBuf++;
+
+	const char * sName = sBuf;
+	while ( sphIsAlpha(*sBuf) )
+		sBuf++;
+	if ( sBuf==sName )
+		LOC_ERR ( "field name" );
+	pField->m_sName.SetBinary ( sName, sBuf-sName );
+
+	if ( !isspace(*sBuf) )
+		LOC_ERR ( "space" );
+	while ( isspace(*sBuf) )
+		sBuf++;
+
+	// parse 'from'
+	if ( strncasecmp ( sBuf, "from", 4 ) )
+		LOC_ERR ( "'from'" );
+	sBuf += 4;
+
+	if ( !isspace(*sBuf) )
+		LOC_ERR ( "space" );
+	while ( isspace(*sBuf) )
+		sBuf++;
+
+	// parse 'query'
+	if ( strncasecmp ( sBuf, "payload-query", 13 ) == 0 )
+	{
+		pField->m_bPayload = true;
+		sBuf += 13;
+	}
+	else if ( strncasecmp ( sBuf, "query", 5 ) == 0 )
+	{
+		pField->m_bPayload = false;
+		sBuf += 5;
+	}
+	else
+		LOC_ERR ( "'query'" );
+
+	// parse ';'
+	while ( isspace(*sBuf) && *sBuf!=';' )
+		sBuf++;
+
+	if ( *sBuf!=';')
+		LOC_ERR ( "';'" );
+	sBuf++;
+
+	// the rest is query
+	while ( isspace(*sBuf) )
+		sBuf++;
+
+	pField->m_sQuery = sBuf;
+
+#undef LOC_ERR
+
+	return true;
+}
 
 
 bool SqlParamsConfigure ( CSphSourceParams_SQL & tParams, const CSphConfigSection & hSource, const char * sSourceName )
@@ -491,6 +544,10 @@ bool SqlParamsConfigure ( CSphSourceParams_SQL & tParams, const CSphConfigSectio
 	SqlAttrsConfigure ( tParams,	hSource("sql_attr_bool"),			SPH_ATTR_BOOL,		sSourceName );
 	SqlAttrsConfigure ( tParams,	hSource("sql_attr_float"),			SPH_ATTR_FLOAT,		sSourceName );
 	SqlAttrsConfigure ( tParams,	hSource("sql_attr_bigint"),			SPH_ATTR_BIGINT,	sSourceName );
+	SqlAttrsConfigure ( tParams,	hSource("sql_attr_string"),			SPH_ATTR_STRING,	sSourceName );
+	SqlAttrsConfigure ( tParams,	hSource("sql_attr_str2wordcount"),	SPH_ATTR_WORDCOUNT,	sSourceName );
+	SqlAttrsConfigure ( tParams,	hSource("sql_field_string"),		SPH_ATTR_STRING,	sSourceName, true );
+	SqlAttrsConfigure ( tParams,	hSource("sql_field_str2wordcount"),	SPH_ATTR_STRING,	sSourceName, true );
 
 	// unpack
 	if ( !ConfigureUnpack ( hSource("unpack_zlib"), SPH_UNPACK_ZLIB, tParams, sSourceName ) )
@@ -509,6 +566,23 @@ bool SqlParamsConfigure ( CSphSourceParams_SQL & tParams, const CSphConfigSectio
 			return false;
 		tParams.m_dAttrs.Add ( tAttr );
 	}
+
+	// parse joined fields
+	for ( CSphVariant * pVal = hSource("sql_joined_field"); pVal; pVal = pVal->m_pNext )
+		if ( !ParseJoinedField ( pVal->cstr(), &tParams.m_dJoinedFields.Add(), sSourceName ) )
+			return false;
+
+	// make sure attr names are unique
+	ARRAY_FOREACH ( i, tParams.m_dAttrs )
+		for ( int j = i + 1; j < tParams.m_dAttrs.GetLength(); j++ )
+		{
+			const CSphString & sName = tParams.m_dAttrs[i].m_sName;
+			if ( sName == tParams.m_dAttrs[j].m_sName )
+			{
+				fprintf ( stdout, "ERROR: duplicate attribute name: %s\n", sName.cstr() );
+				return false;
+			}
+		}
 
 	// additional checks
 	if ( tParams.m_iRangedThrottle<0 )
@@ -836,6 +910,7 @@ bool DoIndex ( const CSphConfigSection & hIndex, const char * sIndexName, const 
 	// parse all sources
 	CSphVector<CSphSource*> dSources;
 	bool bGotAttrs = false;
+	bool bGotJoinedFields = false;
 	bool bSpawnFailed = false;
 
 	for ( CSphVariant * pSourceName = hIndex("source"); pSourceName; pSourceName = pSourceName->m_pNext )
@@ -856,6 +931,9 @@ bool DoIndex ( const CSphConfigSection & hIndex, const char * sIndexName, const 
 
 		if ( pSource->HasAttrsConfigured() )
 			bGotAttrs = true;
+
+		if ( pSource->HasJoinedFields() )
+			bGotJoinedFields = true;
 
 		pSource->SetupFieldMatch ( sPrefixFields.cstr (), sInfixFields.cstr () );
 
@@ -964,6 +1042,12 @@ bool DoIndex ( const CSphConfigSection & hIndex, const char * sIndexName, const 
 		if ( bGotAttrs && tSettings.m_eDocinfo==SPH_DOCINFO_NONE )
 		{
 			fprintf ( stdout, "FATAL: index '%s': got attributes, but docinfo is 'none' (fix your config file).\n", sIndexName );
+			exit ( 1 );
+		}
+
+		if ( bGotJoinedFields && tSettings.m_eDocinfo==SPH_DOCINFO_INLINE )
+		{
+			fprintf ( stdout, "FATAL: index '%s': got joined fields, but docinfo is 'inline' (fix your config file).\n", sIndexName );
 			exit ( 1 );
 		}
 
@@ -1183,7 +1267,7 @@ int main ( int argc, char ** argv )
 		}
 		else if ( bMerge && strcasecmp ( argv[i], "--merge-dst-range" )==0 && (i+3)<argc )
 		{
-			dMergeDstFilters.Resize ( dMergeDstFilters.GetLength()+1 );
+			dMergeDstFilters.Add();
 			dMergeDstFilters.Last().m_eType = SPH_FILTER_RANGE;
 			dMergeDstFilters.Last().m_sAttrName = argv[i+1];
 			dMergeDstFilters.Last().m_uMinValue = (SphAttr_t) strtoull ( argv[i+2], NULL, 10 );
@@ -1282,6 +1366,8 @@ int main ( int argc, char ** argv )
 
 		return 1;
 	}
+
+	sphSetupSignals();
 
 	///////////////
 	// load config

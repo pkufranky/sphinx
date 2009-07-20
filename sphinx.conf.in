@@ -80,6 +80,17 @@ source src1
 		SELECT id, group_id, UNIX_TIMESTAMP(date_added) AS date_added, title, content \
 		FROM documents
 
+
+	# joined field fetch query
+	# lets you avoid (slow) JOIN and GROUP_CONCAT
+	# syntax is FIELD-NAME 'from' 'query'; QUERY
+	#
+	# REQUIRES that query results are in ascending document ID order!
+	# multi-value, optional, default is empty list of queries
+	#
+	# sql_joined_field			= tagstext from query; SELECT docid, CONCAT('tag',tagid) FROM tags ORDER BY docid ASC
+
+
 	# range query setup, query that must return min and max ID values
 	# optional, default is empty
 	#
@@ -162,6 +173,27 @@ source src1
 	#	SELECT MIN(id), MAX(id) FROM tags
 
 
+	# string attribute declaration
+	# multi-value (an arbitrary number of these is allowed), optional
+	# lets you store and retrieve strings
+	#
+	# sql_attr_string			= stitle
+
+
+	# wordcount attribute declaration
+	# multi-value (an arbitrary number of these is allowed), optional
+	# lets you count the words at indexing time
+	#
+	# sql_attr_str2wordcount	= stitle
+
+
+	# combined field plus attribute declaration (from a single column)
+	# stores column as an attribute, but also indexes it as a full-text field
+	#
+	# sql_field_string			= author
+	# sql_field_str2wordcount	= title
+
+	
 	# post-query, executed on sql_query completion
 	# optional, default is empty
 	#
@@ -379,12 +411,19 @@ index test1
 
 
 	# enable star-syntax (wildcards) when searching prefix/infix indexes
-	# known values are 0 and 1
+	# search-time only, does not affect indexing, can be 0 or 1
 	# optional, default is 0 (do not use wildcard syntax)
 	#
 	# enable_star		= 1
 
 
+	# expand keywords with exact forms and/or stars when searching fit indexes
+	# search-time only, does not affect indexing, can be 0 or 1
+	# optional, default is 0 (do not expand keywords)
+	#
+	# expand_keywords		= 1
+
+	
 	# n-gram length to index, for CJK indexing
 	# only supports 0 and 1 for now, other lengths to be implemented
 	# optional, default is 0 (disable n-grams)
@@ -670,6 +709,23 @@ searchd
 	# optional, default is 32K
 	#
 	# read_unhinted		= 32K
+
+
+	# max allowed per-batch query count (aka multi-query count)
+	# optional, default is 32
+	max_batch_queries	= 32
+
+
+	# max common subtree document cache size, per-query
+	# optional, default is 512K, 0 means disable subtree optimization
+	#
+	# subtree_docs_cache	= 4M
+
+
+	# max common subtree hit cache size, per-query
+	# optional, default is 1M, 0 means disable subtree optimization
+	#
+	# subtree_hits_cache	= 8M
 }
 
 # --eof--

@@ -8,7 +8,7 @@
 #include <stdarg.h>
 
 //////////////////////////////////////////////////////////////////////////
-// EXTENEDED PARSER RELOADED
+// EXTENDED PARSER RELOADED
 //////////////////////////////////////////////////////////////////////////
 
 #include "yysphinxquery.h"
@@ -34,13 +34,27 @@ public:
 	int				GetToken ( YYSTYPE * lvalp );
 
 	void			AddQuery ( XQNode_t * pNode );
-	XQNode_t *		AddKeyword ( const char * sKeyword );
+	XQNode_t *		AddKeyword ( const char * sKeyword, DWORD uStar = STAR_NONE );
 	XQNode_t *		AddKeyword ( XQNode_t * pLeft, XQNode_t * pRight );
 	XQNode_t *		AddOp ( XQOperator_e eOp, XQNode_t * pLeft, XQNode_t * pRight );
 
 	void			Cleanup ();
 	XQNode_t *		SweepNulls ( XQNode_t * pNode );
 	bool			FixupNots ( XQNode_t * pNode );
+
+	bool TokenIsBlended()
+	{
+		return m_pTokenizer->TokenIsBlended();
+	}
+	
+	void SkipBlended ()
+	{
+		if ( m_pTokenizer->TokenIsBlended() )
+		{
+			m_pTokenizer->SkipBlended();
+			m_iAtomPos++;
+		}
+	}
 
 public:
 	XQQuery_t *				m_pParsed;
@@ -65,7 +79,10 @@ public:
 	int						m_iPendingType;
 	YYSTYPE					m_tPendingToken;
 
-	int						m_iGotTokens;
+	bool					m_bEmpty;
+	
+	bool					m_bNotQuoted;
+	int						m_iQuotes;
 
 	CSphVector<CSphString>	m_dIntTokens;
 };
@@ -79,7 +96,8 @@ int yylex ( YYSTYPE * lvalp, XQParser_t * pParser )
 
 void yyerror ( XQParser_t * pParser, const char * sMessage )
 {
-	pParser->m_pParsed->m_sParseError.SetSprintf ( "%s near '%s'", sMessage, pParser->m_pLastTokenStart );
+	if ( pParser->m_pParsed->m_sParseError.IsEmpty() )
+		pParser->m_pParsed->m_sParseError.SetSprintf ( "%s near '%s'", sMessage, pParser->m_pLastTokenStart );
 }
 
 #include "yysphinxquery.c"
@@ -102,6 +120,100 @@ void XQNode_t::SetFieldSpec ( DWORD uMask, int iMaxPos )
 		m_dChildren[i]->SetFieldSpec ( uMask, iMaxPos );
 }
 
+void XQNode_t::ClearFieldMask ()
+{
+	m_uFieldMask = 0xFFFFFFFFUL;
+
+	ARRAY_FOREACH ( i, m_dChildren )
+		m_dChildren[i]->ClearFieldMask();
+}
+
+/// hash of subtrees
+struct IdentityHash_fn
+{
+	static inline uint64_t Hash ( uint64_t iValue )
+	{
+		return iValue;
+	}
+};
+
+
+bool XQNode_t::IsEqualTo ( const XQNode_t * pNode )
+{
+	if ( !pNode || pNode->GetHash()!=GetHash() || pNode->GetOp()!=GetOp() || pNode->IsPlain()!=IsPlain() )
+		return false;
+
+	if ( IsPlain() )
+	{
+		// two plain nodes. let's compare the keywords
+		if ( pNode->m_dWords.GetLength()!=m_dWords.GetLength() )
+			return false;
+
+		if ( !m_dWords.GetLength() )
+			return true;
+
+		SmallStringHash_T<int> hSortedWords;
+		ARRAY_FOREACH ( i, pNode->m_dWords )
+			hSortedWords.Add ( 0, pNode->m_dWords[i].m_sWord );
+
+		ARRAY_FOREACH ( i, m_dWords )
+			if ( !hSortedWords.Exists ( m_dWords[i].m_sWord ) )
+				return false;
+
+		return true;
+	}
+	
+	// two non-plain nodes. let's compare the children
+	if ( pNode->m_dChildren.GetLength() != m_dChildren.GetLength() )
+		return false;
+
+	if ( !m_dChildren.GetLength() )
+		return true;
+
+	CSphOrderedHash < XQNode_t *, uint64_t, IdentityHash_fn, 128, 117 > hChildrenSubset;
+	ARRAY_FOREACH ( i, pNode->m_dChildren )
+		hChildrenSubset.Add ( pNode->m_dChildren[i], pNode->m_dChildren[i]->GetHash() );
+
+	ARRAY_FOREACH ( i, m_dChildren )
+	{
+		XQNode_t ** ppLookup = hChildrenSubset ( m_dChildren[i]->GetHash() );
+		if ( !ppLookup || !(*ppLookup)->IsEqualTo(m_dChildren[i]) )
+			return false;
+	}
+	return true;
+}
+
+
+uint64_t XQNode_t::GetHash() const
+{
+	if ( m_iMagicHash )
+		return m_iMagicHash;
+
+	XQOperator_e dZeroOp[2];
+	dZeroOp[0] = m_eOp;
+	dZeroOp[1] = (XQOperator_e) 0;
+
+	ARRAY_FOREACH ( i, m_dWords )
+		m_iMagicHash = 100 + ( m_iMagicHash ^ sphFNV64 ( (const BYTE*)m_dWords[i].m_sWord.cstr() ) ); ///< +100 to make it non-transitive
+	ARRAY_FOREACH ( j, m_dChildren )
+		m_iMagicHash = 100 + ( m_iMagicHash ^ m_dChildren[j]->GetHash() ); ///< +100 to make it non-transitive
+	m_iMagicHash += 1000000; ///< to immerse difference between parents and children
+	m_iMagicHash ^= sphFNV64 ( (const BYTE*)dZeroOp );
+
+	return m_iMagicHash;
+}
+
+
+void XQNode_t::SetOp ( XQOperator_e eOp, XQNode_t * pArg1, XQNode_t * pArg2 )
+{
+	m_eOp = eOp;
+	m_dChildren.Reset();
+	if ( pArg1 )
+		m_dChildren.Add ( pArg1 );
+	if ( pArg2 )
+		m_dChildren.Add ( pArg2 );
+}
+
 //////////////////////////////////////////////////////////////////////////
 
 XQParser_t::XQParser_t ()
@@ -109,6 +221,8 @@ XQParser_t::XQParser_t ()
 	, m_pLastTokenStart ( NULL )
 	, m_pRoot ( NULL )
 	, m_bStopOnInvalid ( true )
+	, m_bNotQuoted ( true )
+	, m_iQuotes ( 0 )
 {
 }
 
@@ -386,6 +500,7 @@ int XQParser_t::GetToken ( YYSTYPE * lvalp )
 		sToken = (const char *) m_pTokenizer->GetToken ();
 		if ( !sToken )
 			return 0;
+		m_bEmpty = false;
 
 		m_iPendingNulls = m_pTokenizer->GetOvershortCount ();
 		m_iAtomPos += 1+m_iPendingNulls;
@@ -420,11 +535,17 @@ int XQParser_t::GetToken ( YYSTYPE * lvalp )
 					// got stray '<', ignore
 					continue;
 				}
-
-			} else
+			}
+			else
 			{
-				// all the other specials are passed to parser verbtaim
-				m_iPendingType = sToken[0]=='!' ? '-' : sToken[0];
+				if ( sToken[0] == '~' && m_bNotQuoted )
+					m_iPendingType = TOK_BLEND;
+				else
+				{
+					// all the other specials are passed to parser verbatim
+					m_bNotQuoted = sToken[0] != '"' || ++m_iQuotes % 2;
+					m_iPendingType = sToken[0]=='!' ? '-' : sToken[0];
+				}
 				break;
 			}
 		}
@@ -440,14 +561,23 @@ int XQParser_t::GetToken ( YYSTYPE * lvalp )
 		if ( !m_pDict->GetWordID ( sTmp ) )
 			sToken = NULL;
 
-		m_tPendingToken.pNode = AddKeyword ( sToken );
+		// information about stars is lost after this point, so was have to save it now
+		DWORD uStarPosition = STAR_NONE;
+		uStarPosition |= *m_pTokenizer->GetTokenEnd() == '*' ? STAR_BACK : 0;
+		uStarPosition |= ( m_pTokenizer->GetTokenStart() != m_pTokenizer->GetBufferPtr() ) &&
+			m_pTokenizer->GetTokenStart()[-1] == '*' ? STAR_FRONT : 0;
+
+		m_tPendingToken.pNode = AddKeyword ( sToken, uStarPosition );
 		m_iPendingType = TOK_KEYWORD;
+		
+		if ( m_pTokenizer->TokenIsBlended() )
+			m_iAtomPos--;
 		break;
 	}
 
 	// someone must be pending now!
 	assert ( m_iPendingType );
-	m_iGotTokens++;
+	m_bEmpty = false;
 
 	// ladies first, though
 	if ( m_iPendingNulls>0 )
@@ -472,9 +602,10 @@ void XQParser_t::AddQuery ( XQNode_t * pNode )
 }
 
 
-XQNode_t * XQParser_t::AddKeyword ( const char * sKeyword )
+XQNode_t * XQParser_t::AddKeyword ( const char * sKeyword, DWORD uStarPosition )
 {
 	XQKeyword_t tAW ( sKeyword, m_iAtomPos );
+	tAW.m_uStarPosition = uStarPosition;
 
 	XQNode_t * pNode = new XQNode_t();
 	pNode->m_dWords.Add ( tAW );
@@ -509,8 +640,7 @@ XQNode_t * XQParser_t::AddOp ( XQOperator_e eOp, XQNode_t * pLeft, XQNode_t * pR
 	if ( eOp==SPH_QUERY_NOT )
 	{
 		XQNode_t * pNode = new XQNode_t();
-		pNode->m_dChildren.Add ( pLeft );
-		pNode->m_eOp = eOp;
+		pNode->SetOp ( SPH_QUERY_NOT, pLeft );
 		return pNode;
 	}
 
@@ -528,16 +658,14 @@ XQNode_t * XQParser_t::AddOp ( XQOperator_e eOp, XQNode_t * pLeft, XQNode_t * pR
 
 	// build a new node
 	XQNode_t * pResult = NULL;
-	if ( !pLeft->IsPlain() && pLeft->m_eOp==eOp )
+	if ( !pLeft->IsPlain() && pLeft->GetOp()==eOp )
 	{
 		pLeft->m_dChildren.Add ( pRight );
 		pResult = pLeft;
 	} else
 	{
 		XQNode_t * pNode = new XQNode_t();
-		pNode->m_dChildren.Add ( pLeft );
-		pNode->m_dChildren.Add ( pRight );
-		pNode->m_eOp = eOp;
+		pNode->SetOp ( eOp, pLeft, pRight );
 		pResult = pNode;
 	}
 
@@ -592,7 +720,7 @@ XQNode_t * XQParser_t::SweepNulls ( XQNode_t * pNode )
 	}
 
 	// remove redundancies if needed
-	if ( pNode->m_eOp!=SPH_QUERY_NOT && pNode->m_dChildren.GetLength()==1 )
+	if ( pNode->GetOp()!=SPH_QUERY_NOT && pNode->m_dChildren.GetLength()==1 )
 	{
 		XQNode_t * pRet = pNode->m_dChildren[0];
 		pNode->m_dChildren.Reset ();
@@ -621,7 +749,7 @@ bool XQParser_t::FixupNots ( XQNode_t * pNode )
 	// extract NOT subnodes
 	CSphVector<XQNode_t*> dNots;
 	ARRAY_FOREACH ( i, pNode->m_dChildren )
-		if ( pNode->m_dChildren[i]->m_eOp==SPH_QUERY_NOT )
+		if ( pNode->m_dChildren[i]->GetOp()==SPH_QUERY_NOT )
 	{
 		dNots.Add ( pNode->m_dChildren[i] );
 		pNode->m_dChildren.RemoveFast ( i-- );
@@ -639,26 +767,25 @@ bool XQParser_t::FixupNots ( XQNode_t * pNode )
 	}
 
 	// NOT within OR? we can't compute that
-	if ( pNode->m_eOp==SPH_QUERY_OR )
+	if ( pNode->GetOp()==SPH_QUERY_OR )
 	{
 		m_pParsed->m_sParseError.SetSprintf ( "query is non-computable (NOT is not allowed within OR)" );
 		return false;
 	}
 
 	// NOT used in before operator
-	if ( pNode->m_eOp==SPH_QUERY_BEFORE )
+	if ( pNode->GetOp()==SPH_QUERY_BEFORE )
 	{
 		m_pParsed->m_sParseError.SetSprintf ( "query is non-computable (NOT cannot be used as before operand)" );
 		return false;
 	}
 
 	// must be some NOTs within AND at this point, convert this node to ANDNOT
-	assert ( pNode->m_eOp==SPH_QUERY_AND && pNode->m_dChildren.GetLength() && dNots.GetLength() );
+	assert ( pNode->GetOp()==SPH_QUERY_AND && pNode->m_dChildren.GetLength() && dNots.GetLength() );
 
 	XQNode_t * pAnd = new XQNode_t();
+	pAnd->SetOp ( SPH_QUERY_AND, pNode->m_dChildren );
 	m_dSpawned.Add ( pAnd );
-	pAnd->m_eOp = SPH_QUERY_AND;
-	pAnd->m_dChildren = pNode->m_dChildren;
 
 	XQNode_t * pNot = NULL;
 	if ( dNots.GetLength()==1 )
@@ -667,15 +794,11 @@ bool XQParser_t::FixupNots ( XQNode_t * pNode )
 	} else
 	{
 		pNot = new XQNode_t();
+		pNot->SetOp ( SPH_QUERY_OR, dNots );
 		m_dSpawned.Add ( pNot );
-		pNot->m_eOp = SPH_QUERY_OR;
-		pNot->m_dChildren = dNots;
 	}
 
-	pNode->m_eOp = SPH_QUERY_ANDNOT;
-	pNode->m_dChildren.Reset ();
-	pNode->m_dChildren.Add ( pAnd );
-	pNode->m_dChildren.Add ( pNot );
+	pNode->SetOp ( SPH_QUERY_ANDNOT, pAnd, pNot );
 	return true;
 }
 
@@ -709,6 +832,18 @@ bool XQParser_t::Parse ( XQQuery_t & tParsed, const char * sQuery, const ISphTok
 	pMyTokenizer->AddSpecials ( "()|-!@~\"/^$<" );
 	pMyTokenizer->EnableQueryParserMode ( true );
 
+	// check for relaxed syntax
+	const char * OPTION_RELAXED = "@@relaxed";
+	const int OPTION_RELAXED_LEN = strlen ( OPTION_RELAXED );
+
+	m_bStopOnInvalid = true;
+	if ( strncmp ( sQuery, OPTION_RELAXED, OPTION_RELAXED_LEN )==0 && !sphIsAlpha ( sQuery[OPTION_RELAXED_LEN]) )
+	{
+		sQuery += OPTION_RELAXED_LEN;
+		m_bStopOnInvalid = false;
+	}
+
+	// setup parser
 	m_pParsed = &tParsed;
 	m_sQuery = (BYTE*) sQuery;
 	m_iQueryLen = strlen(sQuery);
@@ -720,12 +855,12 @@ bool XQParser_t::Parse ( XQQuery_t & tParsed, const char * sQuery, const ISphTok
 	m_iPendingNulls = 0;
 	m_iPendingType = 0;
 	m_pRoot = NULL;
-	m_iGotTokens = 0;
+	m_bEmpty = true;
 
 	m_pTokenizer->SetBuffer ( m_sQuery, m_iQueryLen );
 	int iRes = yyparse ( this );
 
-	if ( iRes && m_iGotTokens )
+	if ( iRes && !m_bEmpty )
 	{
 		Cleanup ();
 		return false;
@@ -740,7 +875,7 @@ bool XQParser_t::Parse ( XQQuery_t & tParsed, const char * sQuery, const ISphTok
 		return false;
 	}
 
-	if ( m_pRoot && m_pRoot->m_eOp==SPH_QUERY_NOT )
+	if ( m_pRoot && m_pRoot->GetOp()==SPH_QUERY_NOT )
 	{
 		m_pParsed->m_sParseError.SetSprintf ( "query is non-computable (single NOT operator)" );
 		return false;
@@ -768,31 +903,30 @@ static void xqIndent ( int iIndent )
 }
 
 
-static void xqDump ( CSphExtendedQueryNode * pNode, const CSphSchema & tSch, int iIndent )
+static void xqDump ( XQNode_t * pNode, const CSphSchema & tSch, int iIndent )
 {
-	if ( pNode->m_tAtom.IsEmpty() )
+	if ( !pNode->IsPlain() )
 	{
 		xqIndent ( iIndent );
-		switch ( pNode->m_eOp )
+		switch ( pNode->GetOp() )
 		{
 			case SPH_QUERY_AND: printf ( "AND:\n" ); break;
 			case SPH_QUERY_OR: printf ( "OR:\n" ); break;
 			case SPH_QUERY_NOT: printf ( "NOT:\n" ); break;
 			case SPH_QUERY_ANDNOT: printf ( "ANDNOT:\n" ); break;
 			case SPH_QUERY_BEFORE: printf ( "BEFORE:\n" ); break;
-			default: printf ( "unknown-op-%d:\n", pNode->m_eOp ); break;
+			default: printf ( "unknown-op-%d:\n", pNode->GetOp() ); break;
 		}
 		ARRAY_FOREACH ( i, pNode->m_dChildren )
 			xqDump ( pNode->m_dChildren[i], tSch, iIndent+1 );
 	} else
 	{
-		const CSphExtendedQueryAtom & tAtom = pNode->m_tAtom;
 		xqIndent ( iIndent );
-		printf ( "MATCH(%d,%d):", tAtom.m_uFields, tAtom.m_iMaxDistance );
+		printf ( "MATCH(%d,%d):", pNode->m_uFieldMask, pNode->m_iMaxDistance );
 
-		ARRAY_FOREACH ( i, tAtom.m_dWords )
+		ARRAY_FOREACH ( i, pNode->m_dWords )
 		{
-			const CSphExtendedQueryAtomWord & tWord = tAtom.m_dWords[i];
+			const XQKeyword_t & tWord = pNode->m_dWords[i];
 
 			const char * sLocTag = "";
 			if ( tWord.m_bFieldStart ) sLocTag = ", start";
@@ -821,6 +955,122 @@ bool sphParseExtendedQuery ( XQQuery_t & tParsed, const char * sQuery, const ISp
 #endif
 
 	return bRes;
+}
+
+//////////////////////////////////////////////////////////////////////////
+// COMMON SUBTREES DETECTION
+//////////////////////////////////////////////////////////////////////////
+
+/// query tree wrapper, with bells, whistles, flags, counters
+struct MarkedNode_t
+{
+	int			m_iCounter;
+	XQNode_t *	m_pTree;
+	bool		m_bMarked;
+	int			m_iOrder;
+
+	MarkedNode_t ( XQNode_t * pTree=NULL )
+		: m_iCounter ( 1 )
+		, m_pTree ( pTree )
+		, m_bMarked ( false )
+		, m_iOrder ( 0 )
+	{}
+
+	void MarkIt ( bool bMark=true )
+	{
+		// mark
+		if ( bMark )
+		{
+			m_iCounter++;
+			m_bMarked = true;
+			return;
+		}
+
+		// unmark
+		if ( m_bMarked && m_iCounter>1 )
+			m_iCounter--;
+		if ( m_iCounter<2 )
+			m_bMarked = false;
+	}
+};
+
+
+typedef CSphOrderedHash < MarkedNode_t, uint64_t, IdentityHash_fn, 128, 117 > CSubtreeHash;
+
+
+/// check hashes, then check subtrees, then flag
+static void FlagCommonSubtrees ( XQNode_t * pTree, CSubtreeHash & hSubTrees, bool bFlag=true, bool bMarkIt=true )
+{
+	if ( !pTree )
+		return;
+
+	// skip nodes that actually are leaves (eg. "AND smth" node instead of merely "smth")
+	if ( pTree->IsPlain() && pTree->m_dWords.GetLength()==1 && pTree->GetOp()!=SPH_QUERY_NOT )
+		return;
+
+	// we do not yet have any collisions stats, but chances are we don't actually need IsEqualTo() at all
+	uint64_t iHash = pTree->GetHash();
+	if ( bFlag && hSubTrees.Exists(iHash) && hSubTrees[iHash].m_pTree->IsEqualTo(pTree) )
+	{
+		hSubTrees[iHash].MarkIt ();
+
+		// we just add all the children but do NOT mark them as common
+		// so that only the subtree root is marked.
+		// also we unmark all the cases which were eaten by bigger trees
+		ARRAY_FOREACH ( i, pTree->m_dChildren )
+			if ( !hSubTrees.Exists ( pTree->m_dChildren[i]->GetHash() ) )
+				FlagCommonSubtrees ( pTree->m_dChildren[i], hSubTrees, false, bMarkIt );
+			else
+				FlagCommonSubtrees ( pTree->m_dChildren[i], hSubTrees, false, false );
+	} else
+	{
+		if ( !bMarkIt )
+			hSubTrees[iHash].MarkIt(false);
+		else
+			hSubTrees.Add ( pTree, iHash );
+
+		ARRAY_FOREACH ( i, pTree->m_dChildren )
+			FlagCommonSubtrees ( pTree->m_dChildren[i], hSubTrees, bFlag, bMarkIt );
+	}
+}
+
+
+static void SignCommonSubtrees ( XQNode_t * pTree, CSubtreeHash & hSubTrees )
+{
+	if ( !pTree )
+		return;
+
+	uint64_t iHash = pTree->GetHash();
+	if ( hSubTrees.Exists(iHash) && hSubTrees[iHash].m_bMarked )
+		pTree->TagAsCommon ( hSubTrees[iHash].m_iOrder, hSubTrees[iHash].m_iCounter );
+
+	ARRAY_FOREACH ( i, pTree->m_dChildren )
+		SignCommonSubtrees ( pTree->m_dChildren[i], hSubTrees );
+}
+
+
+int sphMarkCommonSubtrees ( const CSphVector<XQNode_t*> & dTrees )
+{
+	if ( !dTrees.GetLength() )
+		return 0;
+
+	// flag common subtrees and refcount them
+	CSubtreeHash hSubtrees;
+	ARRAY_FOREACH ( i, dTrees )
+		FlagCommonSubtrees ( dTrees[i], hSubtrees );
+
+	// number marked subtrees and assign them order numbers.
+	int iOrder = 0;
+	hSubtrees.IterateStart();
+	while ( hSubtrees.IterateNext() )
+		if ( hSubtrees.IterateGet().m_bMarked )
+			hSubtrees.IterateGet().m_iOrder = iOrder++;
+
+	// copy the flags and orders to original trees
+	ARRAY_FOREACH ( i, dTrees )
+		SignCommonSubtrees ( dTrees[i], hSubtrees );
+
+	return iOrder;
 }
 
 //

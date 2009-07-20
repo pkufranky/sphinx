@@ -27,7 +27,7 @@ define ( "SEARCHD_COMMAND_STATUS",	5 );
 define ( "SEARCHD_COMMAND_QUERY",	6 );
 
 /// current client-side command implementation versions
-define ( "VER_COMMAND_SEARCH",		0x116 );
+define ( "VER_COMMAND_SEARCH",		0x117 );
 define ( "VER_COMMAND_EXCERPT",		0x100 );
 define ( "VER_COMMAND_UPDATE",		0x102 );
 define ( "VER_COMMAND_KEYWORDS",	0x100 );
@@ -57,6 +57,8 @@ define ( "SPH_RANK_WORDCOUNT",		3 );	///< simple word-count weighting, rank is a
 define ( "SPH_RANK_PROXIMITY",		4 );
 define ( "SPH_RANK_MATCHANY",		5 );
 define ( "SPH_RANK_FIELDMASK",		6 );
+define ( "SPH_RANK_SPH04",			7 );
+define ( "SPH_RANK_TOTAL",			8 );
 
 /// known sort modes
 define ( "SPH_SORT_RELEVANCE",		0 );
@@ -78,6 +80,7 @@ define ( "SPH_ATTR_ORDINAL",		3 );
 define ( "SPH_ATTR_BOOL",			4 );
 define ( "SPH_ATTR_FLOAT",			5 );
 define ( "SPH_ATTR_BIGINT",			6 );
+define ( "SPH_ATTR_STRING",			7 );
 define ( "SPH_ATTR_MULTI",			0x40000000 );
 
 /// known grouping functions
@@ -702,11 +705,7 @@ class SphinxClient
 	/// set ranking mode
 	function SetRankingMode ( $ranker )
 	{
-		assert ( $ranker==SPH_RANK_PROXIMITY_BM25
-			|| $ranker==SPH_RANK_BM25
-			|| $ranker==SPH_RANK_NONE
-			|| $ranker==SPH_RANK_WORDCOUNT
-			|| $ranker==SPH_RANK_PROXIMITY );
+		assert ( $ranker>=0 && $ranker<SPH_RANK_TOTAL );
 		$this->_ranker = $ranker;
 	}
 
@@ -1221,6 +1220,10 @@ class SphinxClient
 							list(,$val) = unpack ( "N*", substr ( $response, $p, 4 ) ); $p += 4;
 							$attrvals[$attr][] = sprintf ( "%u", $val );
 						}
+					} else if ( $type==SPH_ATTR_STRING )
+					{
+						$attrvals[$attr] = substr ( $response, $p, $val );
+						$p += $val;						
 					} else
 					{
 						$attrvals[$attr] = sprintf ( "%u", $val );
@@ -1290,6 +1293,7 @@ class SphinxClient
 		if ( !isset($opts["single_passage"]) )		$opts["single_passage"] = false;
 		if ( !isset($opts["use_boundaries"]) )		$opts["use_boundaries"] = false;
 		if ( !isset($opts["weight_order"]) )		$opts["weight_order"] = false;
+		if ( !isset($opts["query_mode"]) )			$opts["query_mode"] = false;
 
 		/////////////////
 		// build request
@@ -1301,6 +1305,7 @@ class SphinxClient
 		if ( $opts["single_passage"] )	$flags |= 4;
 		if ( $opts["use_boundaries"] )	$flags |= 8;
 		if ( $opts["weight_order"] )	$flags |= 16;
+		if ( $opts["query_mode"] )		$flags |= 32;
 		$req = pack ( "NN", 0, $flags ); // mode=0, flags=$flags
 		$req .= pack ( "N", strlen($index) ) . $index; // req index
 		$req .= pack ( "N", strlen($words) ) . $words; // req words
@@ -1446,8 +1451,8 @@ class SphinxClient
 
 	function EscapeString ( $string )
 	{
-		$from = array ( '\\', '(',')','|','-','!','@','~','"','&', '/' );
-		$to   = array ( '\\\\', '\(','\)','\|','\-','\!','\@','\~','\"', '\&', '\/' );
+		$from = array ( '\\', '(',')','|','-','!','@','~','"','&', '/', '^', '$', '=' );
+		$to   = array ( '\\\\', '\(','\)','\|','\-','\!','\@','\~','\"', '\&', '\/', '\^', '\$', '\=' );
 
 		return str_replace ( $from, $to, $string );
 	}

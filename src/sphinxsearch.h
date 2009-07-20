@@ -15,6 +15,7 @@
 #define _sphinxsearch_
 
 #include "sphinx.h"
+#include "sphinxquery.h"
 
 //////////////////////////////////////////////////////////////////////////
 // PACKED HIT MACROS
@@ -55,9 +56,8 @@ public:
 	CSphString		m_sWord;		///< my copy of word
 	CSphString		m_sDictWord;	///< word after being processed by dict (eg. stemmed)
 	SphWordID_t		m_iWordID;		///< word ID, from dictionary
-	int				m_iQueryPos;	///< word position, from query
 	int				m_iTermPos;
-	int				m_iAtomPos;
+	int				m_iAtomPos;		///< word position, from query
 
 	// setup by QwordSetup()
 	int				m_iDocs;		///< document count, from wordlist
@@ -72,7 +72,6 @@ public:
 public:
 	ISphQword ()
 		: m_iWordID ( 0 )
-		, m_iQueryPos ( -1 )
 		, m_iTermPos ( 0 )
 		, m_iAtomPos ( 0 )
 		, m_iDocs ( 0 )
@@ -82,10 +81,20 @@ public:
 		, m_uMatchHits ( 0 )
 		, m_iHitlistPos ( 0 )
 	{}
+	virtual ~ISphQword () {}
 
 	virtual const CSphMatch &	GetNextDoc ( DWORD * pInlineDocinfo ) = 0;
 	virtual void				SeekHitlist ( SphOffset_t uOff ) = 0;
 	virtual DWORD				GetNextHit () = 0;
+
+	void Reset ()
+	{
+		m_iDocs = 0;
+		m_iHits = 0;
+		m_uFields = 0;
+		m_uMatchHits = 0;
+		m_iHitlistPos = 0;
+	}
 };
 
 
@@ -96,8 +105,9 @@ public:
 	CSphDict *				m_pDict;
 	const CSphIndex *		m_pIndex;
 	ESphDocinfo				m_eDocinfo;
-	CSphDocInfo				m_tMin;
-	int						m_iToCalc;
+	CSphMatch				m_tMin;
+	int						m_iInlineRowitems;		///< inline rowitems count
+	int						m_iDynamicRowitems;		///< dynamic rowitems counts (including (!) inline)
 	int64_t					m_iMaxTimer;
 	CSphString *			m_pWarning;
 
@@ -105,12 +115,15 @@ public:
 		: m_pDict ( NULL )
 		, m_pIndex ( NULL )
 		, m_eDocinfo ( SPH_DOCINFO_NONE )
-		, m_iToCalc ( 0 )
+		, m_iInlineRowitems ( 0 )
+		, m_iDynamicRowitems ( 0 )
 		, m_iMaxTimer ( 0 )
 		, m_pWarning ( NULL )
 	{}
-
 	virtual ~ISphQwordSetup () {}
+
+	virtual ISphQword *					QwordSpawn ( const XQKeyword_t & ) const = 0;
+	virtual bool						QwordSetup ( ISphQword * pQword ) const = 0;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -119,15 +132,53 @@ public:
 class ISphRanker
 {
 public:
+	virtual						~ISphRanker () {}
 	virtual CSphMatch *			GetMatchesBuffer() = 0;
 	virtual int					GetMatches ( int iFields, const int * pWeights ) = 0;
 	virtual void				Reset ( const ISphQwordSetup & tSetup ) = 0;
 };
 
 /// factory
-ISphRanker * sphCreateRanker ( const CSphQuery * pQuery, const char * sQuery, CSphQueryResult * pResult, const ISphQwordSetup & tTermSetup, CSphString & sError );
+ISphRanker * sphCreateRanker ( const XQNode_t * pRoot, ESphRankMode eRankMode, CSphQueryResult * pResult, const ISphQwordSetup & tTermSetup );
+
+//////////////////////////////////////////////////////////////////////////
+
+/// hit mark, used for snippets generation
+struct SphHitMark_t
+{
+	DWORD	m_uPosition;
+	DWORD	m_uSpan;
+};
+
+/// hit marker, used for snippets generation
+class CSphHitMarker
+{
+public:
+	class ExtNode_i *		m_pRoot;
+
+public:
+							CSphHitMarker() : m_pRoot ( NULL ) {}
+							~CSphHitMarker();
+
+	void					Mark ( CSphVector<SphHitMark_t> & );
+	static CSphHitMarker *	Create ( const XQNode_t * pRoot, const ISphQwordSetup & tSetup );
+};
+
+/// factory for regular query objects
+
+/// factory for parsed query trees
+ISphRanker * sphCreateRanker ( const XQNode_t * pRoot, ESphRankMode eRankMode, CSphQueryResult * pResult, const ISphQwordSetup & tTermSetup );
+
+/// initialize intra-batch node cache
+/// FIXME! should be moved to per-query TLS when we add MT support
+void sphXQCacheInit ( int iCells, int MaxCachedDocs, int MaxCachedHits );
+
+/// shutdown intra-batch node cache
+/// FIXME! should be moved to per-query TLS when we add MT support
+void sphXQCacheDone ();
 
 #endif // _sphinxsearch_
+
 //
 // $Id$
 //

@@ -31,8 +31,9 @@ struct ISphFilter
 	virtual bool Eval ( const CSphMatch & tMatch ) const = 0;
 
 	/// evaluate filter for a given block
+	/// args are pMinDocinfo and pMaxDocinfo
 	/// returns false if no document in block can possibly pass through the filter
-	virtual bool EvalBlock ( const DWORD *, const DWORD *, int ) const
+	virtual bool EvalBlock ( const DWORD *, const DWORD * ) const
 	{
 		// if filter does not implement block-level evaluation we assume the block will pass
 		return true;
@@ -41,8 +42,7 @@ struct ISphFilter
 	virtual ISphFilter * Join ( ISphFilter * pFilter );
 };
 
-ISphFilter * sphCreateFilter ( CSphFilterSettings &, const CSphSchema &, const DWORD * pMva );
-ISphFilter * sphCreateFilters ( CSphVector<CSphFilterSettings> &, const CSphSchema &, const DWORD * pMva );
+ISphFilter * sphCreateFilter ( CSphFilterSettings &, const CSphSchema &, const DWORD * pMva, CSphString & sError );
 ISphFilter * sphJoinFilters ( ISphFilter *, ISphFilter * );
 
 #endif // _sphinxfilter_

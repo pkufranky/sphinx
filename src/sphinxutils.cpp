@@ -158,6 +158,11 @@ static KeyDesc_t g_dKeysSource[] =
 	{ "unpack_mysqlcompress",	KEY_LIST, NULL },
 	{ "unpack_mysqlcompress_maxsize", 0, NULL },
 	{ "odbc_dsn",				0, NULL },
+	{ "sql_joined_field",		KEY_LIST, NULL },
+	{ "sql_attr_string",		KEY_LIST, NULL },
+	{ "sql_attr_str2wordcount",	KEY_LIST, NULL },
+	{ "sql_field_string",		KEY_LIST, NULL },
+	{ "sql_field_str2wordcount",KEY_LIST, NULL },
 	{ NULL,						0, NULL }
 };
 
@@ -206,6 +211,10 @@ static KeyDesc_t g_dKeysIndex[] =
 	{ "min_stemming_len",		0, NULL },
 	{ "overshort_step",			0, NULL },
 	{ "stopword_step",			0, NULL },
+	{ "blend_chars",			0, NULL },
+	{ "expand_keywords",		0, NULL },
+	{ "hitless_words",			KEY_LIST, NULL },
+	{ "hit_format",				0, NULL },
 	{ "rt_field",				0, NULL },
 	{ "rt_attr_int",			0, NULL },
 	{ "rt_attr_bigint",			0, NULL },
@@ -250,6 +259,11 @@ static KeyDesc_t g_dKeysSearchd[] =
 	{ "listen_backlog",			0, NULL },
 	{ "read_buffer",			0, NULL },
 	{ "read_unhinted",			0, NULL },
+	{ "max_batch_queries",		0, NULL },
+	{ "subtree_docs_cache",		0, NULL },
+	{ "subtree_hits_cache",		0, NULL },
+	{ "workers",				0, NULL },
+	{ "prefork",				0, NULL },
 	{ NULL,						0, NULL }
 };
 
@@ -373,10 +387,6 @@ bool CSphConfigParser::ValidateKey ( const char * sKey )
 }
 
 #if !USE_WINDOWS
-static void sigchld ( int )
-{
-}
-
 
 bool CSphConfigParser::TryToExec ( char * pBuffer, char * pEnd, const char * szFilename, CSphVector<char> & dResult )
 {
@@ -392,8 +402,6 @@ bool CSphConfigParser::TryToExec ( char * pBuffer, char * pEnd, const char * szF
 
 	int iRead  = dPipe [0];
 	int iWrite = dPipe [1];
-
-	signal ( SIGCHLD, sigchld );
 
 	int iChild = fork();
 
@@ -427,7 +435,7 @@ bool CSphConfigParser::TryToExec ( char * pBuffer, char * pEnd, const char * szF
 	else
 		if ( iChild == -1 )
 		{
-			snprintf ( m_sError, sizeof ( m_sError ), "fork failed (error=%s)", strerror(errno) );
+			snprintf ( m_sError, sizeof ( m_sError ), "fork failed: [%d] %s", errno, strerror(errno) );
 			return false;
 		}
 
@@ -441,24 +449,46 @@ bool CSphConfigParser::TryToExec ( char * pBuffer, char * pEnd, const char * szF
 	do
 	{
 		dResult.Resize ( iTotalRead + BUFFER_SIZE );
-		iBytesRead = read ( iRead, (void*)&(dResult [iTotalRead]), BUFFER_SIZE );
+		for ( ;; )
+		{
+			iBytesRead = read ( iRead, (void*)&(dResult [iTotalRead]), BUFFER_SIZE );
+			if ( iBytesRead == -1 && errno == EINTR ) // we can get SIGCHLD just before eof
+				continue;
+			break;
+		}
 		iTotalRead += iBytesRead;
 	}
 	while ( iBytesRead > 0 );
 
-	int iStatus;
-	wait ( &iStatus );
-	iStatus = (signed char) WEXITSTATUS (iStatus);
-
-	if ( iStatus )
+	int iStatus, iResult;
+	do
 	{
-		snprintf ( m_sError, sizeof ( m_sError ), "error executing '%s'", pBuffer );
+		// can be interrupted by pretty much anything (e.g. SIGCHLD from other searchd children)
+		iResult = waitpid ( iChild, &iStatus, 0 );
+		if ( iResult == -1 && errno != EINTR )
+		{
+			snprintf ( m_sError, sizeof ( m_sError ), "waitpid() failed: [%d] %s", errno, strerror(errno) );
+			return false;
+		}
+	}
+	while ( iResult != iChild );
+
+	if ( WIFEXITED ( iStatus ) && WEXITSTATUS ( iStatus ) )
+	{
+		// FIXME? read stderr and log that too
+		snprintf ( m_sError, sizeof ( m_sError ), "error executing '%s' status = %d", pBuffer, WEXITSTATUS ( iStatus ) );
+		return false;
+	}
+
+	if ( WIFSIGNALED ( iStatus ) )
+	{
+		snprintf ( m_sError, sizeof ( m_sError ), "error executing '%s', killed by signal %d", pBuffer, WTERMSIG ( iStatus ) );
 		return false;
 	}
 
 	if ( iBytesRead < 0  )
 	{
-		snprintf ( m_sError, sizeof ( m_sError ), "pipe read error (error=%s)", strerror(errno) );
+		snprintf ( m_sError, sizeof ( m_sError ), "pipe read error: [%d] %s", errno, strerror(errno) );
 		return false;
 	}
 
@@ -771,6 +801,7 @@ bool sphConfTokenizer ( const CSphConfigSection & hIndex, CSphTokenizerSettings 
 	if ( tSettings.m_sSynonymsFile.IsEmpty() )
 		tSettings.m_sSynonymsFile = hIndex.GetStr ( "synonyms" ); // deprecated option name
 	tSettings.m_sIgnoreChars	= hIndex.GetStr ( "ignore_chars" );
+	tSettings.m_sBlendChars		= hIndex.GetStr ( "blend_chars" );
 
 	// phrase boundaries
 	int iBoundaryStep = Max ( hIndex.GetInt ( "phrase_boundary_step" ), -1 );
@@ -813,6 +844,38 @@ void sphConfIndex ( const CSphConfigSection & hIndex, CSphIndexSettings & tSetti
 		else if ( hIndex["docinfo"]=="extern" )	tSettings.m_eDocinfo = SPH_DOCINFO_EXTERN;
 		else
 			fprintf ( stdout, "WARNING: unknown docinfo=%s, defaulting to extern\n", hIndex["docinfo"].cstr() );
+	}
+
+	tSettings.m_eHitFormat = SPH_HIT_FORMAT_INLINE;
+	if ( hIndex("hit_format") )
+	{
+		if ( hIndex["hit_format"]=="plain" )		tSettings.m_eHitFormat = SPH_HIT_FORMAT_PLAIN;
+		else if ( hIndex["hit_format"]=="inline" )	tSettings.m_eHitFormat = SPH_HIT_FORMAT_INLINE;
+		else
+			fprintf ( stdout, "WARNING: unknown hit_format=%s, defaulting to inline\n", hIndex["hit_format"].cstr() );
+	}
+
+	// hit-less indices
+	if ( hIndex("hitless_words") )
+	{
+		for ( const CSphVariant * pVariant = &hIndex["hitless_words"]; pVariant; pVariant = pVariant->m_pNext )
+		{
+			const CSphString & sValue = *pVariant;
+			if ( sValue.Ends("%") )
+			{
+				tSettings.m_eHitless = SPH_HITLESS_SOME;
+				tSettings.m_fHitlessThreshold = float(pVariant->intval()) / 100.0f;
+			}
+			else if ( sValue=="all" )
+			{
+				tSettings.m_eHitless = SPH_HITLESS_ALL;
+			}
+			else
+			{
+				tSettings.m_eHitless = SPH_HITLESS_SOME;
+				tSettings.m_sHitlessFile = sValue;
+			}
+		}
 	}
 }
 
@@ -911,6 +974,33 @@ const char * sphLoadConfig ( const char * sOptConfig, bool bQuiet, CSphConfigPar
 
 	return sOptConfig;
 }
+
+//////////////////////////////////////////////////////////////////////////
+
+#if USE_WINDOWS
+
+void sphSetupSignals ()
+{
+}
+
+#else
+
+static void DummyHandler ( int )
+{
+}
+
+void sphSetupSignals ()
+{
+	struct sigaction tAction;
+	
+	sigfillset ( &tAction.sa_mask );
+	tAction.sa_flags = SA_NOCLDSTOP;
+	tAction.sa_handler = DummyHandler;
+	if ( sigaction ( SIGCHLD, &tAction, NULL ) == -1 )
+		sphDie ( "sigaction() failed: [%d] %s", errno, strerror(errno) );
+}
+
+#endif
 
 //
 // $Id$

@@ -255,7 +255,7 @@ int main ( int argc, char ** argv )
 		CSphQueryResult * pResult = NULL;
 
 		CSphIndex * pIndex = sphCreateIndexPhrase ( hIndex["path"].cstr() );
-		pIndex->SetStar ( hIndex.GetInt("enable_star")!=0 );
+		pIndex->m_bEnableStar = ( hIndex.GetInt("enable_star")!=0 );
 		pIndex->SetWordlistPreload ( hIndex.GetInt("ondisk_dict")==0 );
 
 		CSphString sWarning;
@@ -297,11 +297,30 @@ int main ( int argc, char ** argv )
 				}
 			}
 
-			pResult = pIndex->Query ( &tQuery );
+			// do querying
+			ISphMatchSorter * pTop = sphCreateQueue ( &tQuery, *pIndex->GetSchema(), sError );
+			if ( !pTop )
+			{
+				sError.SetSprintf ( "failed to create sorting queue: %s", sError.cstr() );
+				break;
+			}
 
-			if ( !pResult )
-				sError = pIndex->GetLastError ();
+			pResult = new CSphQueryResult();
+			if ( !pIndex->MultiQuery ( &tQuery, pResult, 1, &pTop ) )
+			{
+				// failure; pull that error message
+				sError = pIndex->GetLastError();
+				SafeDelete ( pResult );
+			} else
+			{
+				// success; fold them matches
+				pResult->m_dMatches.Reset ();
+				pResult->m_iTotalMatches += pTop->GetTotalCount();
+				pResult->m_tSchema = pTop->GetSchema();
+				sphFlattenQueue ( pTop, pResult, 0 );
+			}
 
+			SafeDelete ( pTop );
 			break;
 		}
 
@@ -358,6 +377,13 @@ int main ( int argc, char ** argv )
 						case SPH_ATTR_TIMESTAMP:	fprintf ( stdout, "%s", myctime ( (DWORD)tMatch.GetAttr ( tAttr.m_tLocator ) ) ); break;
 						case SPH_ATTR_FLOAT:		fprintf ( stdout, "%f", tMatch.GetAttrFloat ( tAttr.m_tLocator ) ); break;
 						case SPH_ATTR_BIGINT:		fprintf ( stdout, "%"PRIu64, tMatch.GetAttr ( tAttr.m_tLocator ) ); break;
+						case SPH_ATTR_STRING:
+							{
+								const BYTE * pStr;
+								int iLen = sphUnpackStr ( pResult->m_pStrings + tMatch.GetAttr ( tAttr.m_tLocator ), &pStr );
+								fwrite ( pStr, 1, iLen, stdout );
+								break;
+							}
 						default:					fprintf ( stdout, "(unknown-type-%d)", tAttr.m_eAttrType );
 					}
 				}
@@ -381,7 +407,10 @@ int main ( int argc, char ** argv )
 
 						MYSQL_ROW tRow = mysql_fetch_row ( pSqlResult );
 						if ( !tRow )
-							LOC_MYSQL_ERROR ( "mysql_fetch_row" );
+						{
+							fprintf ( stdout, "\t(document not found in db)\n" );
+							break;
+						}
 
 						for ( int iField=0; iField<(int)pSqlResult->field_count; iField++ )
 							fprintf ( stdout, "\t%s=%s\n",
