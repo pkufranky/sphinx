@@ -281,7 +281,7 @@ private:
 template < typename T >
 struct SphLess_T
 {
-	inline bool operator () ( const T & a, const T & b )
+	inline bool IsLess ( const T & a, const T & b ) const
 	{
 		return a < b;
 	}
@@ -292,7 +292,7 @@ struct SphLess_T
 template < typename T >
 struct SphGreater_T
 {
-	inline bool operator () ( const T & a, const T & b )
+	inline bool IsLess ( const T & a, const T & b ) const
 	{
 		return b < a;
 	}
@@ -303,10 +303,16 @@ struct SphGreater_T
 template < typename T, typename C >
 struct SphMemberLess_T
 {
-	const T C::*			m_pMember;
+	const T C::* m_pMember;
 
-	explicit				SphMemberLess_T ( T C::* pMember )		: m_pMember ( pMember ){}
-	inline bool operator ()	( const C & a, const C & b ) const		{ return ((&a)->*m_pMember) < ((&b)->*m_pMember); }
+	explicit SphMemberLess_T ( T C::* pMember )
+		: m_pMember ( pMember )
+	{}
+
+	inline bool IsLess ( const C & a, const C & b ) const
+	{
+		return ((&a)->*m_pMember) < ((&b)->*m_pMember);
+	}
 };
 
 template < typename T, typename C >
@@ -317,11 +323,35 @@ sphMemberLess ( T C::* pMember)
 }
 
 
+/// generic accessor
+template < typename T >
+struct SphAccessor_T
+{
+	typedef T MEDIAN_TYPE;
+
+	T & Get ( T * pBase, int iIndex ) const
+	{
+		return pBase[iIndex];
+	}
+
+	void GetMedian ( MEDIAN_TYPE & tMedian, const T & tValue ) const
+	{
+		tMedian = tValue;
+	}
+
+	void Swap ( T & a, T & b ) const
+	{
+		::Swap ( a, b );
+	}
+};
+
+
 /// generic sort
-template < typename T, typename F > void sphSort ( T * pData, int iCount, F COMP )
+template < typename T, typename U, typename V >
+void sphSort ( T * pData, int iCount, U COMP, V ACC )
 {
 	int st0[32], st1[32], a, b, k, i, j;
-	T x;
+	typename V::MEDIAN_TYPE x;
 
 	k = 1;
 	st0[0] = 0;
@@ -331,14 +361,14 @@ template < typename T, typename F > void sphSort ( T * pData, int iCount, F COMP
 		k--;
 		i = a = st0[k];
 		j = b = st1[k];
-		x = pData [ (a+b)/2 ]; // FIXME! add better median at least
+		ACC.GetMedian ( x, ACC.Get ( pData, (a+b)/2 ) ); // FIXME! add better median at least
 		while ( a<b )
 		{
 			while ( i<=j )
 			{
-				while ( COMP ( pData[i], x ) ) i++;
-				while ( COMP ( x, pData[j] ) ) j--;
-				if (i <= j) { Swap ( pData[i], pData[j] ); i++; j--; }
+				while ( COMP.IsLess ( ACC.Get ( pData, i ), x ) ) i++;
+				while ( COMP.IsLess ( x, ACC.Get ( pData, j ) ) ) j--;
+				if (i <= j) { ACC.Swap ( ACC.Get ( pData, i ), ACC.Get ( pData, j ) ); i++; j--; }
 			}
 
 			if ( j-a>=b-i )
@@ -355,7 +385,15 @@ template < typename T, typename F > void sphSort ( T * pData, int iCount, F COMP
 }
 
 
-template < typename T > void sphSort ( T * pData, int iCount )
+template < typename T, typename U >
+void sphSort ( T * pData, int iCount, U COMP )
+{
+	sphSort ( pData, iCount, COMP, SphAccessor_T<T>() );
+}
+
+
+template < typename T >
+void sphSort ( T * pData, int iCount )
 {
 	sphSort ( pData, iCount, SphLess_T<T>() );
 }
@@ -1504,6 +1542,55 @@ protected:
 #if !USE_WINDOWS
 	CSphSharedBuffer<BYTE>		m_pStorage;
 	pthread_mutex_t *			m_pMutex;
+#endif
+};
+
+//////////////////////////////////////////////////////////////////////////
+
+/// my thread handle and thread func magic
+#if USE_WINDOWS
+typedef HANDLE SphThread_t;
+typedef DWORD SphThreadRet_t;
+#define SPH_THREAD_CONV __stdcall
+#else
+typedef pthread_t SphThread_t;
+typedef void * SphThreadRet_t;
+#define SPH_THREAD_CONV
+#endif
+
+/// thread func declaration helper
+#define SphThreadFunc_t SphThreadRet_t SPH_THREAD_CONV
+
+/// my create thread wrapper
+/// pThread can be NULL; fire-and-forget (detached) thread will be created
+bool sphThreadCreate ( SphThread_t * pThread, SphThreadRet_t ( SPH_THREAD_CONV * fnThread )(void*), void * pArg );
+
+/// my join thread wrapper
+bool sphThreadJoin ( SphThread_t * pThread );
+
+//////////////////////////////////////////////////////////////////////////
+
+/// rwlock implementation
+class CSphRwlock
+{
+public:
+	CSphRwlock ();
+	~CSphRwlock () {}
+
+	bool Init ();
+	bool Done ();
+
+	bool ReadLock ();
+	bool WriteLock ();
+	bool Unlock ();
+
+#if USE_WINDOWS
+private:
+	HANDLE				m_hWriteMutex;
+	HANDLE				m_hReadEvent;
+	LONG				m_iReaders;
+#else
+	pthread_rwlock_t	m_tLock;
 #endif
 };
 

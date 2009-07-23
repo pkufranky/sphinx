@@ -451,6 +451,7 @@ protected:
 	CSphMatch					m_dMyMatches[ExtNode_i::MAX_DOCS];	///< my local matches pool; for filtering
 	CSphMatch					m_tTestMatch;
 	const CSphIndex *			m_pIndex;							///< this is he who'll do my filtering!
+	CSphQueryContext *			m_pCtx;
 };
 
 
@@ -2948,6 +2949,8 @@ void ExtOrder_c::SetQwordsIDF ( const ExtQwordsHash_t & hQwords )
 
 ExtRanker_c::ExtRanker_c ( const XQNode_t * pRoot, const ISphQwordSetup & tSetup )
 {
+	assert ( tSetup.m_pCtx );
+
 	m_iInlineRowitems = tSetup.m_iInlineRowitems;
 	for ( int i=0; i<ExtNode_i::MAX_DOCS; i++ )
 	{
@@ -2965,6 +2968,7 @@ ExtRanker_c::ExtRanker_c ( const XQNode_t * pRoot, const ISphQwordSetup & tSetup
 	m_uPayloadMask = 0;
 	m_iQwords = 0;
 	m_pIndex = tSetup.m_pIndex;
+	m_pCtx = tSetup.m_pCtx;
 }
 
 void ExtRanker_c::Reset ( const ISphQwordSetup & tSetup )
@@ -2991,7 +2995,7 @@ const ExtDoc_t * ExtRanker_c::GetFilteredDocs ()
 			if ( pCand->m_pDocinfo )
 				memcpy ( m_tTestMatch.m_pDynamic, pCand->m_pDocinfo, m_iInlineRowitems*sizeof(CSphRowitem) );
 
-			if ( m_pIndex->EarlyReject ( m_tTestMatch ) )
+			if ( m_pIndex->EarlyReject ( m_pCtx, m_tTestMatch ) )
 			{
 				pCand++;
 				continue;
@@ -3620,6 +3624,7 @@ private:
 private:
 	int								m_iRefCount;
 	bool							m_StateOk;
+	const ISphQwordSetup *			m_pSetup;
 
 	CSphVector<ExtDoc_t>			m_Docs;
 	CSphVector<ExtHit_t>			m_Hits;
@@ -3633,6 +3638,7 @@ public:
 	NodeCacheContainer_t ()
 		: m_iRefCount ( 1 )
 		, m_StateOk ( true )
+		, m_pSetup ( NULL )
 	{}
 
 public:
@@ -3658,7 +3664,7 @@ public:
 
 private:
 
-	bool							WarmupCache ( ExtNode_i * pChild, int iRefCount, const ISphQwordSetup & tSetup );
+	bool							WarmupCache ( ExtNode_i * pChild );
 	ExtNode_i *						CreateCachedWrapper ( ExtNode_i* pChild, const XQNode_t * pRawChild, const ISphQwordSetup & tSetup );
 	void							Invalidate();
 };
@@ -3730,6 +3736,8 @@ public:
 	{
 		if ( m_pChild )
 			m_pChild->SetQwordsIDF ( hQwords );
+		if ( m_pNode->m_pSetup )
+			m_pNode->WarmupCache ( m_pChild );
 	}
 
 	virtual bool GotHitless ()
@@ -3750,20 +3758,19 @@ ExtNode_i * NodeCacheContainer_t::CreateCachedWrapper ( ExtNode_i * pChild, cons
 	// wow! we have a virgin!
 	if ( !m_Docs.GetLength() )
 	{
-		return ( WarmupCache ( pChild, pRawChild->GetCount(), tSetup ) )
-			? new ExtNodeCached_t ( this, pChild )
-			: pChild;
+		m_iRefCount = pRawChild->GetCount();
+		m_pSetup = &tSetup;
 	}
 	return new ExtNodeCached_t ( this, pChild );
 }
 
 
-bool NodeCacheContainer_t::WarmupCache ( ExtNode_i * pChild, int iRefCount, const ISphQwordSetup & tSetup )
+bool NodeCacheContainer_t::WarmupCache ( ExtNode_i * pChild )
 {
-	m_iRefCount = iRefCount;
 	SphDocID_t pMaxID = 0;
 	const ExtDoc_t * pChunk = pChild->GetDocsChunk ( &pMaxID );
 	int iStride = 0;
+	assert ( m_pSetup );
 
 	if ( pChunk && pChunk->m_pDocinfo )
 		iStride = pChild->m_iStride;
@@ -3785,7 +3792,6 @@ bool NodeCacheContainer_t::WarmupCache ( ExtNode_i * pChild, int iRefCount, cons
 			}
 			iHasDocs = true;
 		}
-
 		
 		const ExtHit_t * pHits = NULL;
 		if ( iHasDocs )
@@ -3802,7 +3808,8 @@ bool NodeCacheContainer_t::WarmupCache ( ExtNode_i * pChild, int iRefCount, cons
 		if ( m_iMaxCachedDocs<0 || m_iMaxCachedDocs<0 )
 		{
 			Invalidate ();
-			pChild->Reset(tSetup);
+			pChild->Reset(*m_pSetup);
+			m_pSetup = NULL;
 			return false;
 		}
 		pChunk = pChild->GetDocsChunk ( &pMaxID );
@@ -3814,7 +3821,8 @@ bool NodeCacheContainer_t::WarmupCache ( ExtNode_i * pChild, int iRefCount, cons
 
 	m_Docs.Add().m_uDocid = DOCID_MAX;
 	m_Hits.Add().m_uDocid = DOCID_MAX;
-	pChild->Reset(tSetup);
+	pChild->Reset(*m_pSetup);
+	m_pSetup = NULL;
 	return true;
 }
 
