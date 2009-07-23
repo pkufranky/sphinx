@@ -256,6 +256,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\src\sphinxint.h"
+				>
+			</File>
+			<File
 				RelativePath="..\src\sphinxquery.h"
 				>
 			</File>

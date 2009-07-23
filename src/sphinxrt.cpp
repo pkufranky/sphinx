@@ -69,7 +69,7 @@ static inline const BYTE * UnzipDword ( DWORD * pValue, const BYTE * pIn )
 
 struct CmpHit_fn
 {
-	inline int operator () ( const CSphWordHit & a, const CSphWordHit & b )
+	inline bool IsLess ( const CSphWordHit & a, const CSphWordHit & b )
 	{
 		return 	( a.m_iWordID < b.m_iWordID ) ||
 			( a.m_iWordID == b.m_iWordID && a.m_iDocID < b.m_iDocID ) || 
@@ -602,14 +602,12 @@ public:
 #endif
 
 public:
-	virtual bool						EarlyReject ( CSphMatch & ) const;
+	virtual bool						EarlyReject ( CSphQueryContext * pCtx, CSphMatch & ) const;
 	virtual const CSphSourceStats &		GetStats () const { return m_tStats; }
 
-	virtual bool				MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int iSorters, ISphMatchSorter ** ppSorters );
-	virtual bool				MultiQueryEx ( int iQueries, CSphQuery * ppQueries, CSphQueryResult ** ppResults, ISphMatchSorter ** ppSorters);
+	virtual bool				MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int iSorters, ISphMatchSorter ** ppSorters ) const;
+	virtual bool				MultiQueryEx ( int iQueries, CSphQuery * ppQueries, CSphQueryResult ** ppResults, ISphMatchSorter ** ppSorters ) const;
 	virtual bool				GetKeywords ( CSphVector <CSphKeywordInfo> & dKeywords, const char * szQuery, bool bGetStats );
-
-	void						BindWeights ( const CSphQuery * pQuery );
 
 	void						CopyDocinfo ( CSphMatch & tMatch, const DWORD * pFound ) const;
 	const CSphRowitem *			FindDocinfo ( const RtSegment_t * pSeg, SphDocID_t uDocID ) const;
@@ -1129,7 +1127,7 @@ RtSegment_t * RtIndex_t::MergeSegments ( const RtSegment_t * pSeg1, const RtSegm
 
 struct CmpSegments_fn
 {
-	inline int operator () ( const RtSegment_t * a, const RtSegment_t * b )
+	inline bool IsLess ( const RtSegment_t * a, const RtSegment_t * b )
 	{
 		return a->GetMergeFactor() > b->GetMergeFactor();
 	}
@@ -1425,7 +1423,7 @@ struct RtQwordSetup_t : ISphQwordSetup
 };
 
 
-ISphQword * RtQwordSetup_t::QwordSpawn ( const XQKeyword_t & tKeyword ) const
+ISphQword * RtQwordSetup_t::QwordSpawn ( const XQKeyword_t & ) const
 {
 	return new RtQword_t ();
 }
@@ -1465,7 +1463,7 @@ bool RtQwordSetup_t::QwordSetup ( ISphQword * pQword ) const
 }
 
 
-bool RtIndex_t::EarlyReject ( CSphMatch & tMatch ) const
+bool RtIndex_t::EarlyReject ( CSphQueryContext *, CSphMatch & ) const
 {
 	/*!COMMIT*/
 	return false;
@@ -1534,7 +1532,7 @@ const CSphRowitem * RtIndex_t::FindDocinfo ( const RtSegment_t * pSeg, SphDocID_
 }
 
 
-bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int iSorters, ISphMatchSorter ** ppSorters )
+bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int iSorters, ISphMatchSorter ** ppSorters ) const
 {
 	RLOCK ( this );
 
@@ -1554,6 +1552,9 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	pResult->m_iQueryTime = 0;
 	int64_t tmQueryStart = sphMicroTimer();
 
+	// my thread local context
+	CSphQueryContext tCtx;
+
 	// setup search terms
 	RtQwordSetup_t tTermSetup;
 	tTermSetup.m_pDict = m_pDict;
@@ -1563,15 +1564,16 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 		tTermSetup.m_iMaxTimer = sphMicroTimer() + pQuery->m_uMaxQueryMsec*1000; // max_query_time
 	tTermSetup.m_pWarning = &pResult->m_sWarning;
 	tTermSetup.m_pSeg = m_pSegments[0];
+	tTermSetup.m_pCtx = &tCtx;
 
 	// bind weights
-	BindWeights ( pQuery );
+	tCtx.BindWeights ( pQuery, m_tSchema );
 
 	// parse query
 	XQQuery_t tParsed;
 	if ( !sphParseExtendedQuery ( tParsed, pQuery->m_sQuery.cstr(), GetTokenizer(), GetSchema(), m_pDict ) )
 	{
-		m_sLastError = tParsed.m_sParseError;
+		pResult->m_sError = tParsed.m_sParseError;
 		return false;
 	}
 
@@ -1609,48 +1611,16 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	return true;
 }
 
-bool RtIndex_t::MultiQueryEx ( int iQueries, CSphQuery * ppQueries, CSphQueryResult ** ppResults, ISphMatchSorter ** ppSorters)
+bool RtIndex_t::MultiQueryEx ( int, CSphQuery *, CSphQueryResult **, ISphMatchSorter ** ) const
 {
 	/*!COMMIT*/
 	return false;
 }
 
-bool RtIndex_t::GetKeywords ( CSphVector <CSphKeywordInfo> & dKeywords, const char * szQuery, bool bGetStats )
+bool RtIndex_t::GetKeywords ( CSphVector <CSphKeywordInfo> &, const char *, bool )
 {
 	/*!COMMIT*/
 	return false;
-}
-
-//////////////////////////////////////////////////////////////////////////
-
-// FIXME! move to CSphIndex
-void RtIndex_t::BindWeights ( const CSphQuery * pQuery )
-{
-	const int MIN_WEIGHT = 1;
-
-	// defaults
-	m_iWeights = Min ( m_tSchema.m_dFields.GetLength(), SPH_MAX_FIELDS );
-	for ( int i=0; i<m_iWeights; i++ )
-		m_dWeights[i] = MIN_WEIGHT;
-
-	// name-bound weights
-	if ( pQuery->m_dFieldWeights.GetLength() )
-	{
-		ARRAY_FOREACH ( i, pQuery->m_dFieldWeights )
-		{
-			int j = m_tSchema.GetFieldIndex ( pQuery->m_dFieldWeights[i].m_sName.cstr() );
-			if ( j>=0 && j<SPH_MAX_FIELDS )
-				m_dWeights[j] = Max ( MIN_WEIGHT, pQuery->m_dFieldWeights[i].m_iValue );
-		}
-		return;
-	}
-
-	// order-bound weights
-	if ( pQuery->m_pWeights )
-	{
-		for ( int i=0; i<Min ( m_iWeights, pQuery->m_iWeights ); i++ )
-			m_dWeights[i] = Max ( MIN_WEIGHT, (int)pQuery->m_pWeights[i] );
-	}
 }
 
 //////////////////////////////////////////////////////////////////////////

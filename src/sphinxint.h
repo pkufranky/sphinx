@@ -6,6 +6,7 @@
 #define _sphinxint_
 
 #include "sphinx.h"
+#include "sphinxfilter.h"
 
 /// file writer with write buffering and int encoder
 class CSphWriter : ISphNoncopyable
@@ -58,6 +59,44 @@ private:
 	CSphString *	m_pError;
 
 	void			Flush ();
+};
+
+/// per-query search context
+/// everything that index needs to compute/create to process the query
+class CSphQueryContext
+{
+public:
+	// searching-only, per-query
+	int							m_iWeights;						///< search query field weights count
+	int							m_dWeights [ SPH_MAX_FIELDS ];	///< search query field weights
+
+	bool						m_bEarlyLookup;			///< whether early attr value lookup is needed
+	bool						m_bLateLookup;			///< whether late attr value lookup is needed
+
+	ISphFilter *				m_pFilter;
+	ISphFilter *				m_pWeightFilter;
+
+	struct CalcItem_t
+	{
+		CSphAttrLocator			m_tLoc;					///< result locator
+		DWORD					m_uType;				///< result type
+		ISphExpr *				m_pExpr;				///< evaluator (non-owned)
+	};
+	CSphVector<CalcItem_t>		m_dEarlyCalc;			///< early-calc evaluators
+	CSphVector<CalcItem_t>		m_dLateCalc;			///< late-calc evaluators
+
+	CSphVector<CSphAttrOverride> *	m_pOverrides;		///< overridden attribute values
+
+public:
+	CSphQueryContext ();
+	~CSphQueryContext ();
+
+	void						BindWeights ( const CSphQuery * pQuery, const CSphSchema & tSchema );
+	bool						SetupCalc ( CSphQueryResult * pResult, const CSphSchema & tInSchema, const CSphSchema & tSchema, const DWORD * pMvaPool );
+	bool						CreateFilters ( CSphQuery * pQuery, const CSphSchema & tSchema, const DWORD * pMvaPool, CSphString & sError );
+
+	void						EarlyCalc ( CSphMatch & tMatch ) const;
+	void						LateCalc ( CSphMatch & tMatch ) const;
 };
 
 #endif // _sphinxint_
