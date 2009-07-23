@@ -35,7 +35,8 @@ extern void sphSortDocinfos ( DWORD * pBuf, int iCount, int iStride );
 
 //////////////////////////////////////////////////////////////////////////
 
-static inline void ZipDword ( CSphVector<BYTE> & dOut, DWORD uValue )
+template < typename T >
+static inline void ZipT ( CSphVector<BYTE> & dOut, T uValue )
 {
 	do 
 	{
@@ -48,22 +49,40 @@ static inline void ZipDword ( CSphVector<BYTE> & dOut, DWORD uValue )
 }
 
 
-static inline const BYTE * UnzipDword ( DWORD * pValue, const BYTE * pIn )
+template < typename T >
+static inline const BYTE * UnzipT ( T * pValue, const BYTE * pIn )
 {
-	DWORD uValue = 0;
+	T uValue = 0;
 	BYTE bIn;
 	int iOff = 0;
 
 	do 
 	{
 		bIn = *pIn++;
-		uValue += ( bIn & 0x7f )<<iOff;
+		uValue += (T( bIn & 0x7f )) << iOff;
 		iOff += 7;
 	} while ( bIn & 0x80 );
 
 	*pValue = uValue;
 	return pIn;
 }
+
+#define ZipDword ZipT<DWORD>
+#define ZipQword ZipT<uint64_t>
+#define UnzipDword UnzipT<DWORD>
+#define UnzipQword UnzipT<uint64_t>
+
+#if USE_64BIT
+#define ZipDocid ZipQword
+#define ZipWordid ZipQword
+#define UnzipDocid UnzipQword
+#define UnzipWordid UnzipQword
+#else
+#define ZipDocid ZipDword
+#define ZipWordid ZipDword
+#define UnzipDocid UnzipDword
+#define UnzipWordid UnzipDword
+#endif
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -241,7 +260,7 @@ struct RtDocWriter_t
 	void ZipDoc ( const RtDoc_t & tDoc )
 	{
 		CSphVector<BYTE> & dDocs = *m_pDocs;
-		ZipDword ( dDocs, tDoc.m_uDocID - m_uLastDocID ); // !COMMIT might be qword
+		ZipDocid ( dDocs, tDoc.m_uDocID - m_uLastDocID );
 		m_uLastDocID = tDoc.m_uDocID;
 		ZipDword ( dDocs, tDoc.m_uFields );
 		ZipDword ( dDocs, tDoc.m_uHits );
@@ -284,7 +303,7 @@ struct RtDocReader_t
 
 		const BYTE * pIn = m_pDocs;
 		SphDocID_t uDeltaID;			 
-		pIn = UnzipDword ( &uDeltaID, pIn ); // !COMMIT might be qword
+		pIn = UnzipDocid ( &uDeltaID, pIn );
 		m_tDoc.m_uDocID += uDeltaID;
 		pIn = UnzipDword ( &m_tDoc.m_uFields, pIn );
 		pIn = UnzipDword ( &m_tDoc.m_uHits, pIn );
@@ -344,7 +363,7 @@ struct RtWordWriter_t
 {
 	CSphVector<BYTE> *	m_pWords;
 	SphWordID_t			m_uLastWordID;
-	DWORD				m_uLastDoc;
+	SphDocID_t			m_uLastDoc;
 
 	explicit RtWordWriter_t ( RtSegment_t * pSeg )
 		: m_pWords ( &pSeg->m_dWords )
@@ -355,10 +374,10 @@ struct RtWordWriter_t
 	void ZipWord ( const RtWord_t & tWord )
 	{
 		CSphVector<BYTE> & tWords = *m_pWords;
-		ZipDword ( tWords, tWord.m_uWordID - m_uLastWordID ); // !COMMIT might be qword
+		ZipWordid ( tWords, tWord.m_uWordID - m_uLastWordID );
 		ZipDword ( tWords, tWord.m_uDocs );
 		ZipDword ( tWords, tWord.m_uHits );
-		ZipDword ( tWords, tWord.m_uDoc - m_uLastDoc );
+		ZipDocid ( tWords, tWord.m_uDoc - m_uLastDoc );
 		m_uLastWordID = tWord.m_uWordID;
 		m_uLastDoc = tWord.m_uDoc;
 	}
@@ -386,11 +405,12 @@ struct RtWordReader_t
 			return NULL;
 
 		const BYTE * pIn = m_pCur;
-		DWORD uDeltaID, uDeltaDoc;
-		pIn = UnzipDword ( &uDeltaID, pIn ); // !COMMIT might be qword
+		SphWordID_t uDeltaID;
+		SphDocID_t uDeltaDoc;
+		pIn = UnzipWordid ( &uDeltaID, pIn );
 		pIn = UnzipDword ( &m_tWord.m_uDocs, pIn );
 		pIn = UnzipDword ( &m_tWord.m_uHits, pIn );
-		pIn = UnzipDword ( &uDeltaDoc, pIn );
+		pIn = UnzipDocid ( &uDeltaDoc, pIn );
 		m_pCur = pIn;
 
 		m_tWord.m_uWordID += uDeltaID;
@@ -819,7 +839,7 @@ RtSegment_t * RtIndex_t::CreateSegment ()
 			tOutHit.ZipHit ( tHit.m_iWordPos );
 		}
 
-		tDoc.m_uFields |= 1UL << ( tHit.m_iWordPos>>24 ); // !COMMIT HIT2LCS()
+		tDoc.m_uFields |= 1UL << HIT2FIELD(tHit.m_iWordPos);
 		tDoc.m_uHits++;
 	}
 
@@ -1262,7 +1282,7 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 			tChk.m_uOffset = wrDict.GetPos();
 		}
 
-		wrDict.ZipInt ( pWord->m_uWordID - uLastWord );
+		wrDict.ZipOffset ( pWord->m_uWordID - uLastWord );
 		wrDict.ZipOffset ( wrDocs.GetPos() - uLastDocpos );
 		wrDict.ZipInt ( pWord->m_uDocs );
 		wrDict.ZipInt ( pWord->m_uHits );
