@@ -718,6 +718,13 @@ bool RtIndex_t::AddDocument ( const CSphVector<CSphString> & dFields, const CSph
 }
 
 
+void AccumCleanup ( void * pArg )
+{
+	RtAccum_t * pAcc = (RtAccum_t *) pArg;
+	SafeDelete ( pAcc );
+}
+
+
 RtAccum_t * RtIndex_t::AcquireAccum ()
 {
 	// check that no other index is holding the acc
@@ -727,7 +734,7 @@ RtAccum_t * RtIndex_t::AcquireAccum ()
 	if ( !g_pTlsAccum )
 	{
 		g_pTlsAccum = new RtAccum_t ();
-		/*!COMMIT register cleanup*/
+		sphThreadOnExit ( AccumCleanup, g_pTlsAccum );
 	}
 
 	assert ( g_pTlsAccum->m_pIndex==NULL || g_pTlsAccum->m_pIndex==this );
@@ -1580,10 +1587,14 @@ bool RtQwordSetup_t::QwordSetup ( ISphQword * pQword ) const
 }
 
 
-bool RtIndex_t::EarlyReject ( CSphQueryContext *, CSphMatch & ) const
+bool RtIndex_t::EarlyReject ( CSphQueryContext * pCtx, CSphMatch & tMatch ) const
 {
-	/*!COMMIT*/
-	return false;
+	// early calc might be needed even when we do not have a filter
+	if ( pCtx->m_bEarlyLookup )
+		CopyDocinfo ( tMatch, FindDocinfo ( (RtSegment_t*)pCtx->m_pIndexData, tMatch.m_iDocID ) );
+
+	pCtx->EarlyCalc ( tMatch );
+	return pCtx->m_pFilter ? !pCtx->m_pFilter->Eval ( tMatch ) : false;
 }
 
 
@@ -1595,6 +1606,8 @@ void RtIndex_t::CopyDocinfo ( CSphMatch & tMatch, const DWORD * pFound ) const
 	// setup static pointer
 	assert ( DOCINFO2ID(pFound)==tMatch.m_iDocID );
 	tMatch.m_pStatic = DOCINFO2ATTRS(pFound);
+
+	// FIXME? implement overrides
 }
 
 
@@ -1649,11 +1662,14 @@ const CSphRowitem * RtIndex_t::FindDocinfo ( const RtSegment_t * pSeg, SphDocID_
 }
 
 
+// FIXME! missing MVA, index_exact_words support
+// FIXME? missing enable_star, legacy match modes support
+// FIXME? any chance to factor out common backend agnostic code?
 bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int iSorters, ISphMatchSorter ** ppSorters ) const
 {
+	// FIXME! too early (how low can you go?)
 	m_tRwlock.ReadLock ();
 
-	/*!COMMIT*/
 	assert ( pQuery );
 	assert ( pResult );
 	assert ( ppSorters );
@@ -1670,14 +1686,17 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	pResult->m_iQueryTime = 0;
 	int64_t tmQueryStart = sphMicroTimer();
 
-	// my thread local context
+	// setup calculations and result schema
 	CSphQueryContext tCtx;
+	if ( !tCtx.SetupCalc ( pResult, ppSorters[0]->GetSchema(), m_tSchema, NULL ) )
+		return false;
 
 	// setup search terms
 	RtQwordSetup_t tTermSetup;
 	tTermSetup.m_pDict = m_pDict;
 	tTermSetup.m_pIndex = this;
 	tTermSetup.m_eDocinfo = m_tSettings.m_eDocinfo;
+	tTermSetup.m_iDynamicRowitems = pResult->m_tSchema.GetDynamicSize();
 	if ( pQuery->m_uMaxQueryMsec>0 )
 		tTermSetup.m_iMaxTimer = sphMicroTimer() + pQuery->m_uMaxQueryMsec*1000; // max_query_time
 	tTermSetup.m_pWarning = &pResult->m_sWarning;
@@ -1705,6 +1724,28 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 		return false;
 	}
 
+	// setup filters
+	if ( !tCtx.CreateFilters ( pQuery, pResult->m_tSchema, NULL, pResult->m_sError ) )
+		return false;
+
+	// FIXME! OPTIMIZE! check if we can early reject the whole index
+
+	// setup lookup
+	// do pre-filter lookup as needed
+	// do pre-sort lookup in all cases
+	// post-sort lookup is complicated (because of many segments)
+	// pre-sort lookup is cheap now anyway, and almost always anyway
+	// (except maybe by stupid relevance-sorting-only benchmarks!!)
+	tCtx.m_bEarlyLookup = ( pQuery->m_dFilters.GetLength() || tCtx.m_dEarlyCalc.GetLength() );
+	tCtx.m_bLateLookup = true;
+
+	// FIXME! setup sorters vs. MVA
+	for ( int i=0; i<iSorters; i++ )
+		(ppSorters[i])->SetMVAPool ( NULL );
+
+	// FIXME! setup overrides
+
+	// do searching
 	ARRAY_FOREACH ( iSeg, m_pSegments )
 	{
 		if ( iSeg!=0 )
@@ -1712,6 +1753,9 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 			tTermSetup.m_pSeg = m_pSegments[iSeg];
 			pRanker->Reset ( tTermSetup );
 		}
+
+		// for lookups to work
+		tCtx.m_pIndexData = m_pSegments[iSeg];
 
 		CSphMatch * pMatch = pRanker->GetMatchesBuffer();
 		for ( ;; )
@@ -1728,16 +1772,23 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 		}
 	}
 
+	// FIXME! mva and string pools ptrs
+	pResult->m_pMva = NULL;
+	pResult->m_pStrings = NULL;
+
 	// query timer
 	pResult->m_iQueryTime = int( ( sphMicroTimer()-tmQueryStart )/1000 );
 	m_tRwlock.Unlock ();
 	return true;
 }
 
-bool RtIndex_t::MultiQueryEx ( int, CSphQuery *, CSphQueryResult **, ISphMatchSorter ** ) const
+bool RtIndex_t::MultiQueryEx ( int iQueries, CSphQuery * ppQueries, CSphQueryResult ** ppResults, ISphMatchSorter ** ppSorters ) const
 {
-	/*!COMMIT*/
-	return false;
+	// FIXME! OPTIMIZE! implement common subtree cache here
+	bool bResult = true;
+	for ( int i=0; i<iQueries; i++ )
+		bResult &= MultiQuery ( &ppQueries[i], ppResults[i], 1, &ppSorters[i] );
+	return bResult;
 }
 
 bool RtIndex_t::GetKeywords ( CSphVector <CSphKeywordInfo> &, const char *, bool )

@@ -6119,18 +6119,23 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 			for ( int i=0; i<pSchema->GetAttrsCount() && sError.IsEmpty(); i++, iAttrVal++ )
 			{
 				const CSphColumnInfo & tCol = pSchema->GetAttr(i);
+
+				// FIXME? index schema is lawfully static, but our temp match obviously needs to be dynamic
+				CSphAttrLocator tLoc = tCol.m_tLocator;
+				tLoc.m_bDynamic = true;
+
 				switch ( tCol.m_eAttrType )
 				{
 					case SPH_ATTR_INTEGER:
-						tStmt.m_tInsertDocinfo.SetAttr ( tCol.m_tLocator, strtoul ( tStmt.m_dInsertValues[iAttrVal].cstr(), NULL, 10 ) );
+						tStmt.m_tInsertDocinfo.SetAttr ( tLoc, strtoul ( tStmt.m_dInsertValues[iAttrVal].cstr(), NULL, 10 ) );
 						break;
 
 					case SPH_ATTR_BIGINT:
-						tStmt.m_tInsertDocinfo.SetAttr ( tCol.m_tLocator, strtoll ( tStmt.m_dInsertValues[iAttrVal].cstr(), NULL, 10 ) );
+						tStmt.m_tInsertDocinfo.SetAttr ( tLoc, strtoll ( tStmt.m_dInsertValues[iAttrVal].cstr(), NULL, 10 ) );
 						break;
 
 					case SPH_ATTR_FLOAT:
-						tStmt.m_tInsertDocinfo.SetAttrFloat ( tCol.m_tLocator, (float)strtod ( tStmt.m_dInsertValues[iAttrVal].cstr(), NULL ) );
+						tStmt.m_tInsertDocinfo.SetAttrFloat ( tLoc, (float)strtod ( tStmt.m_dInsertValues[iAttrVal].cstr(), NULL ) );
 						break;
 
 					default:

@@ -11970,6 +11970,7 @@ CSphQueryContext::CSphQueryContext ()
 	m_bLateLookup = false;
 	m_pFilter = false;
 	m_pWeightFilter = false;
+	m_pIndexData = NULL;
 }
 
 CSphQueryContext::~CSphQueryContext ()

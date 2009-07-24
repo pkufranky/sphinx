@@ -87,6 +87,8 @@ public:
 
 	CSphVector<CSphAttrOverride> *	m_pOverrides;		///< overridden attribute values
 
+	void *						m_pIndexData;			///< backend specific data
+
 public:
 	CSphQueryContext ();
 	~CSphQueryContext ();
