@@ -19,11 +19,100 @@
 #define	WORDID_MAX				0xffffffffUL
 #endif
 
-/////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
 
-// !COMMIT replace with actual scoped locks impl later
-#define RLOCK(_arg) ;
-#define WLOCK(_arg) ;
+#ifndef NDEBUG
+#define Verify(_expr) assert(_expr)
+#else
+#define Verify(_expr) _expr
+#endif
+
+//////////////////////////////////////////////////////////////////////////
+
+// FIXME! move to sphinxstd
+class CSphMutex
+{
+public:
+	CSphMutex () : m_bInitialized ( false ) {}
+	~CSphMutex () { assert ( !m_bInitialized ); }
+
+	bool Init ();
+	bool Done ();
+	bool Lock ();
+	bool Unlock ();
+
+protected:
+	bool m_bInitialized;
+#if USE_WINDOWS
+	HANDLE m_hMutex;
+#else
+	pthread_mutex_t m_tMutex;
+#endif
+};
+
+#if USE_WINDOWS
+
+// Windows mutex implementation
+
+bool CSphMutex::Init ()
+{
+	m_hMutex = CreateMutex ( NULL, FALSE, NULL );
+	m_bInitialized = ( m_hMutex!=NULL );
+	return m_bInitialized;
+}
+
+bool CSphMutex::Done ()
+{
+	if ( !m_bInitialized )
+		return true;
+
+	m_bInitialized = false;
+	return CloseHandle ( m_hMutex )==TRUE;
+}
+
+bool CSphMutex::Lock ()
+{
+	DWORD uWait = WaitForSingleObject ( m_hMutex, INFINITE );
+	return ( uWait!=WAIT_FAILED && uWait!=WAIT_TIMEOUT );
+}
+
+bool CSphMutex::Unlock ()
+{
+	return ReleaseMutex ( m_hMutex )==TRUE;
+}
+
+#else
+
+// UNIX mutex implementation
+
+bool CSphMutex::Init ()
+{
+	m_bInitialized = ( pthread_mutex_init ( &m_tMutex, NULL )==0 );
+	return m_bInitialized;
+}
+
+bool CSphMutex::Done ()
+{
+	if ( !m_bInitialized )
+		return true;
+
+	m_bInitialized = false;
+	return pthread_mutex_destroy ( &m_tMutex )==0;
+}
+
+bool CSphMutex::Lock ()
+{
+	return ( pthread_mutex_lock ( &m_tMutex )==0 );
+}
+
+bool CSphMutex::Unlock ()
+{
+	return ( pthread_mutex_unlock ( &m_tMutex )==0 );
+}
+
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // !COMMIT cleanup extern ref to sphinx.cpp
 extern void sphSortDocinfos ( DWORD * pBuf, int iCount, int iStride );
@@ -121,6 +210,7 @@ protected:
 	static const int			KLIST_ACCUM_THRESH	= 32;
 
 public:
+	static CSphMutex			m_tSegmentSeq;
 	static int					m_iSegments;	///< age tag sequence generator
 	int							m_iTag;			///< segment age tag
 
@@ -145,16 +235,17 @@ public:
 	int							m_iRows;		///< number of actually allocated rows
 	int							m_iAliveRows;	///< number of alive (non-killed) rows
 	CSphVector<CSphRowitem>		m_dRows;		///< row data storage
-
 	CSphVector<SphDocID_t>		m_dKlist;		///< sorted K-list
-	CSphVector<SphDocID_t>		m_dKlistAccum;	///< unsorted K-list accumulator
+	bool						m_bTlsKlist;	///< whether to apply TLS K-list during merge (only used during Commit())
 
 	RtSegment_t ()
 	{
-		WLOCK ( m_iSegments );
+		m_tSegmentSeq.Lock ();
 		m_iTag = m_iSegments++;
+		m_tSegmentSeq.Unlock ();
 		m_iRows = 0;
 		m_iAliveRows = 0;
+		m_bTlsKlist = false;
 	}
 
 	int GetSizeBytes () const
@@ -171,12 +262,10 @@ public:
 	}
 
 	bool HasDocid ( SphDocID_t uDocid ) const;
-	void DeleteDocument ( SphDocID_t uDocid );
-	void OptimizeKlist ();
 };
 
 int RtSegment_t::m_iSegments = 0;
-
+CSphMutex RtSegment_t::m_tSegmentSeq;
 
 bool RtSegment_t::HasDocid ( SphDocID_t uDocid ) const
 {
@@ -204,43 +293,6 @@ bool RtSegment_t::HasDocid ( SphDocID_t uDocid ) const
 			iR = iM;
 	}
 	return false;
-}
-
-
-void RtSegment_t::DeleteDocument ( SphDocID_t uDocid )
-{
-	// do we have it at all?
-	if ( !HasDocid ( uDocid ) )
-		return;
-
-	// do we kill it already?
-	if ( m_dKlist.BinarySearch ( uDocid ) )
-		return;
-
-	ARRAY_FOREACH ( i, m_dKlistAccum )
-		if ( m_dKlistAccum[i]==uDocid )
-			return;
-
-	// update the segment
-	WLOCK ( this );
-	m_dKlistAccum.Add ( uDocid );
-
-	// merge and sort
-	// OPTIMIZE? would sorting accum and merging be faster?
-	if ( m_dKlistAccum.GetLength()==KLIST_ACCUM_THRESH )
-		OptimizeKlist(); // FIXME? nested wlock
-
-	m_iAliveRows--;
-}
-
-
-void RtSegment_t::OptimizeKlist ()
-{
-	WLOCK ( this );
-	ARRAY_FOREACH ( i, m_dKlistAccum )
-		m_dKlist.Add ( m_dKlistAccum[i] );
-	m_dKlist.Sort ();
-	m_dKlistAccum.Resize ( 0 );
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -562,28 +614,54 @@ struct RtHitReader_t
 
 //////////////////////////////////////////////////////////////////////////
 
+#if USE_WINDOWS
+#define __thread __declspec(thread)
+#endif
+
+/// forward ref
+struct RtIndex_t;
+
+/// indexing accumulator
+struct RtAccum_t
+{
+	RtIndex_t *					m_pIndex;		///< my current owner in this thread
+	int							m_iAccumDocs;
+	CSphVector<CSphWordHit>		m_dAccum;
+	CSphVector<CSphRowitem>		m_dAccumRows;
+	CSphVector<SphDocID_t>		m_dAccumKlist;
+
+					RtAccum_t() : m_pIndex ( NULL ), m_iAccumDocs ( 0 ) {}
+	void			AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphMatch & tDoc, int iRowSize );
+	RtSegment_t *	CreateSegment ( int iRowSize );
+};
+
+/// TLS indexing accumulator (we disallow two uncommitted adds within one thread; and so need at most one)
+__thread RtAccum_t * g_pTlsAccum = NULL;
+
+/// RAM based index
 struct RtIndex_t : public ISphRtIndex, public ISphNoncopyable
 {
 private:
-	CSphVector<CSphWordHit>		m_dAccum;
-	CSphVector<CSphRowitem>		m_dAccumRows;
-	int							m_iAccumDocs;
-
+	const int					m_iStride;
 	CSphVector<RtSegment_t*>	m_pSegments;
 
-	const int					m_iStride;
+	CSphMutex					m_tWriterMutex;
+	mutable CSphRwlock			m_tRwlock;
 
 public:
 	explicit					RtIndex_t ( const CSphSchema & tSchema );
 	virtual						~RtIndex_t ();
 
-	void						AddDocument ( const CSphVector<CSphString> & dFields, const CSphMatch & tDoc );
-	void						AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphMatch & tDoc );
-	void						DeleteDocument ( SphDocID_t uDoc );
+	bool						AddDocument ( const CSphVector<CSphString> & dFields, const CSphMatch & tDoc );
+	bool						AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphMatch & tDoc );
+	bool						DeleteDocument ( SphDocID_t uDoc );
 	void						Commit ();
 
 private:
-	RtSegment_t *				CreateSegment ();
+	/// acquire thread-local indexing accumulator
+	/// returns NULL if another index already uses it in an open txn
+	RtAccum_t *					AcquireAccum ();
+
 	RtSegment_t *				MergeSegments ( const RtSegment_t * pSeg1, const RtSegment_t * pSeg2 );
 	const RtWord_t *			CopyWord ( RtSegment_t * pDst, RtWordWriter_t & tOutWord, const RtSegment_t * pSrc, const RtWord_t * pWord, RtWordReader_t & tInWord );
 	void						MergeWord ( RtSegment_t * pDst, const RtSegment_t * pSrc1, const RtWord_t * pWord1, const RtSegment_t * pSrc2, const RtWord_t * pWord2, RtWordWriter_t & tOut );
@@ -643,22 +721,26 @@ protected:
 
 RtIndex_t::RtIndex_t ( const CSphSchema & tSchema )
 	: ISphRtIndex ( "rtindex" )
-	, m_iAccumDocs ( 0 )
 	, m_iStride ( DOCINFO_IDSIZE + tSchema.GetRowSize() )
 {
 	m_tSchema = tSchema;
-	m_dAccum.Reserve ( 2*1024*1024 );
 
 #ifndef NDEBUG
 	// check that index cols are static
 	for ( int i=0; i<m_tSchema.GetAttrsCount(); i++ )
 		assert ( !m_tSchema.GetAttr(i).m_tLocator.m_bDynamic );
 #endif
+
+	Verify ( m_tWriterMutex.Init() );
+	Verify ( m_tRwlock.Init() );
 }
 
 
 RtIndex_t::~RtIndex_t ()
 {
+	Verify ( m_tWriterMutex.Done() );
+	Verify ( m_tRwlock.Done() );
+
 	ARRAY_FOREACH ( i, m_pSegments )
 		SafeDelete ( m_pSegments[i] );
 }
@@ -691,6 +773,7 @@ protected:
 	CSphVector<BYTE *>	m_dFields;
 };
 
+
 CSphSource_StringVector::CSphSource_StringVector ( const CSphVector<CSphString> & dFields, const CSphSchema & tSchema )
 	: CSphSource_Document ( "$stringvector" )
 {
@@ -702,10 +785,11 @@ CSphSource_StringVector::CSphSource_StringVector ( const CSphVector<CSphString> 
 	m_dFields [ dFields.GetLength() ] = NULL;
 }
 
-void RtIndex_t::AddDocument ( const CSphVector<CSphString> & dFields, const CSphMatch & tDoc )
+
+bool RtIndex_t::AddDocument ( const CSphVector<CSphString> & dFields, const CSphMatch & tDoc )
 {
 	if ( !tDoc.m_iDocID )
-		return;
+		return true;
 
 	CSphSource_StringVector tSrc ( dFields, m_tSchema );
 	tSrc.SetTokenizer ( m_pTokenizer );
@@ -713,38 +797,64 @@ void RtIndex_t::AddDocument ( const CSphVector<CSphString> & dFields, const CSph
 
 	tSrc.m_tDocInfo.Clone ( tDoc, m_tSchema.GetRowSize() );
 	if ( !tSrc.IterateHitsNext ( m_sLastError ) )
-		return;
+		return false;
 
-	AddDocument ( tSrc.m_dHits, tDoc );
+	return AddDocument ( tSrc.m_dHits, tDoc );
 }
 
 
-void RtIndex_t::AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphMatch & tDoc )
+RtAccum_t * RtIndex_t::AcquireAccum ()
 {
-	// kill existing copies
-	DeleteDocument ( tDoc.m_iDocID );
+	// check that no other index is holding the acc
+	if ( g_pTlsAccum && g_pTlsAccum->m_pIndex!=NULL && g_pTlsAccum->m_pIndex!=this )
+		return NULL;
 
-	// !COMMIT make Add/Commit local to given thread
+	if ( !g_pTlsAccum )
+	{
+		g_pTlsAccum = new RtAccum_t ();
+		/*!COMMIT register cleanup*/
+	}
+
+	assert ( g_pTlsAccum->m_pIndex==NULL || g_pTlsAccum->m_pIndex==this );
+	g_pTlsAccum->m_pIndex = this;
+	return g_pTlsAccum;
+}
+
+
+bool RtIndex_t::AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphMatch & tDoc )
+{
+	RtAccum_t * pAcc = AcquireAccum();
+	if ( pAcc )
+		pAcc->AddDocument ( dHits, tDoc, m_tSchema.GetRowSize() );
+	return ( pAcc!=NULL );
+}
+
+
+void RtAccum_t::AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphMatch & tDoc, int iRowSize )
+{
+	// schedule existing copies for deletion
+	m_dAccumKlist.Add ( tDoc.m_iDocID );
+
+	// no pain, no gain!
 	if ( !dHits.GetLength() )
 		return;
 
+	// reserve some hit space on first use
+	if ( !m_dAccum.GetLength() )
+		m_dAccum.Reserve ( 128*1024 );
+
 	// accumulate row data; expect fully dynamic rows
 	assert ( !tDoc.m_pStatic );
-	assert (!( !tDoc.m_pDynamic && m_tSchema.GetRowSize()!=0 ));
-	assert (!( tDoc.m_pDynamic && (int)tDoc.m_pDynamic[-1]!=m_tSchema.GetRowSize() ));
+	assert (!( !tDoc.m_pDynamic && iRowSize!=0 ));
+	assert (!( tDoc.m_pDynamic && (int)tDoc.m_pDynamic[-1]!=iRowSize ));
 
-	m_dAccumRows.Resize ( m_dAccumRows.GetLength() + m_iStride );
-	CSphRowitem * pRow = &m_dAccumRows [ m_dAccumRows.GetLength() - m_iStride ];
+	m_dAccumRows.Resize ( m_dAccumRows.GetLength() + DOCINFO_IDSIZE + iRowSize );
+	CSphRowitem * pRow = &m_dAccumRows [ m_dAccumRows.GetLength() - DOCINFO_IDSIZE - iRowSize ];
 	DOCINFOSETID ( pRow, tDoc.m_iDocID );
 
-	int iToCopy = m_iStride-DOCINFO_IDSIZE;
 	CSphRowitem * pAttrs = DOCINFO2ATTRS(pRow);
-
-	for ( int i=0; i<iToCopy; i++ )
+	for ( int i=0; i<iRowSize; i++ )
 		pAttrs[i] = tDoc.m_pDynamic[i];
-
-	for ( int i=iToCopy; i<m_iStride-DOCINFO_IDSIZE; i++)
-		pAttrs[i] = 0;
 
 	// accumulate hits
 	ARRAY_FOREACH ( i, dHits )
@@ -754,8 +864,11 @@ void RtIndex_t::AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphM
 }
 
 
-RtSegment_t * RtIndex_t::CreateSegment ()
+RtSegment_t * RtAccum_t::CreateSegment ( int iRowSize )
 {
+	if ( !m_iAccumDocs )
+		return NULL;
+
 	RtSegment_t * pSeg = new RtSegment_t ();
 
 	CSphWordHit tClosingHit;
@@ -847,13 +960,11 @@ RtSegment_t * RtIndex_t::CreateSegment ()
 	pSeg->m_iAliveRows = m_iAccumDocs;
 
 	// copy and sort attributes
+	int iStride = DOCINFO_IDSIZE + iRowSize;
 	pSeg->m_dRows.SwapData ( m_dAccumRows );
-	sphSortDocinfos ( &pSeg->m_dRows[0], pSeg->m_dRows.GetLength()/m_iStride, m_iStride );
+	sphSortDocinfos ( &pSeg->m_dRows[0], pSeg->m_dRows.GetLength()/iStride, iStride );
 
-	// clean up accumulators
-	m_dAccum.Resize ( 0 );
-	m_dAccumRows.Resize ( 0 );
-	m_iAccumDocs = 0;
+	// done
 	return pSeg;
 }
 
@@ -874,8 +985,10 @@ const RtWord_t * RtIndex_t::CopyWord ( RtSegment_t * pDst, RtWordWriter_t & tOut
 			break;
 
 		// apply klist
-		assert ( pSrc->m_dKlistAccum.GetLength()==0 );
-		if ( pSrc->m_dKlist.BinarySearch ( pDoc->m_uDocID ) )
+		assert (!( pSrc->m_bTlsKlist && !g_pTlsAccum )); // if flag is there, acc must be there
+		assert ( !g_pTlsAccum || g_pTlsAccum->m_pIndex==this ); // *must* be holding acc during merge
+		if ( pSrc->m_dKlist.BinarySearch ( pDoc->m_uDocID )
+			|| ( pSrc->m_bTlsKlist && g_pTlsAccum->m_dAccumKlist.BinarySearch ( pDoc->m_uDocID ) ) )
 		{
 			tNewWord.m_uDocs--;
 			tNewWord.m_uHits -= pDoc->m_uHits;
@@ -1043,13 +1156,6 @@ public:
 
 RtSegment_t * RtIndex_t::MergeSegments ( const RtSegment_t * pSeg1, const RtSegment_t * pSeg2 )
 {
-	RLOCK ( pSeg1 );
-	RLOCK ( pSeg2 );
-
-	// check that k-lists are optimized
-	assert ( pSeg1->m_dKlistAccum.GetLength()==0 );
-	assert ( pSeg2->m_dKlistAccum.GetLength()==0 );
-
 	if ( pSeg1->m_iTag > pSeg2->m_iTag )
 		Swap ( pSeg1, pSeg2 );
 
@@ -1156,26 +1262,53 @@ struct CmpSegments_fn
 
 void RtIndex_t::Commit ()
 {
-	// !COMMIT make Add/Commit local to given thread
-	WLOCK ( this );
-
-	if ( !m_dAccum.GetLength() )
+	RtAccum_t * pAcc = AcquireAccum();
+	if ( !pAcc )
 		return;
 
-	m_tStats.m_iTotalDocuments += m_iAccumDocs;
+	// phase 0, build a new segment
+	// accum and segment are thread local; so no locking needed yet
+	// might be NULL if we're only killing rows this txn
+	RtSegment_t * pNewSeg = pAcc->CreateSegment ( m_tSchema.GetRowSize() );
+	assert ( !pNewSeg || pNewSeg->m_iRows>0 );
+	assert ( !pNewSeg || pNewSeg->m_iAliveRows>0 );
+	assert ( !pNewSeg || pNewSeg->m_bTlsKlist==false );
 
-	RtSegment_t * pNewSeg = CreateSegment();
-	assert ( pNewSeg->m_iRows );
-	assert ( pNewSeg->m_iAliveRows );
+	// clean up parts we no longer need
+	pAcc->m_dAccum.Resize ( 0 );
+	pAcc->m_dAccumRows.Resize ( 0 );
 
+	// sort accum klist, too
+	pAcc->m_dAccumKlist.Sort ();
+
+	// phase 1, lock out other writers (but not readers yet)
+	// concurrent readers are ok during merges, as existing segments won't be modified yet
+	// however, concurrent writers are not
+	Verify ( m_tWriterMutex.Lock() );
+
+	// let merger know that existing segments are subject to additional, TLS K-list filter
+	// safe despite the readers, flag must only be used by writer
+	if ( pAcc->m_dAccumKlist.GetLength() )
+		ARRAY_FOREACH ( i, m_pSegments )
+	{
+		// OPTIMIZE? only need to set the flag if TLS K-list *actually* affects segment
+		assert ( m_pSegments[i]->m_bTlsKlist==false );
+		m_pSegments[i]->m_bTlsKlist = true;
+	}
+
+	// prepare new segments vector
+	// create more new segments by merging as needed
+	// do not (!) kill processed old segments just yet, as sreaders might still need them
 	CSphVector<RtSegment_t*> dSegments;
-	dSegments = m_pSegments;
-	dSegments.Add ( pNewSeg );
-
 	CSphVector<RtSegment_t*> dToKill;
 
+	dSegments = m_pSegments;
+	if ( pNewSeg )
+		dSegments.Add ( pNewSeg );
+
+	// skip merging if no rows were added
 	const int MAX_SEGMENTS = 8;
-	for ( ;; )
+	while ( pNewSeg )
 	{
 		dSegments.Sort ( CmpSegments_fn() );
 
@@ -1188,24 +1321,71 @@ void RtIndex_t::Commit ()
 
 		RtSegment_t * pA = dSegments.Pop();
 		RtSegment_t * pB = dSegments.Pop();
-		pA->OptimizeKlist();
-		pB->OptimizeKlist();
 		dSegments.Add ( MergeSegments ( pA, pB ) );
 		dToKill.Add ( pA );
 		dToKill.Add ( pB );
 	}
 
-	Swap ( m_pSegments, dSegments ); // !COMMIT atomic
+	// phase 2, obtain exclusive writer lock
+	// we now have to update K-lists in (some of) the survived segments
+	// and also swap in new segment list
+	m_tRwlock.WriteLock ();
+
+	// update K-lists on survivors
+	if ( pAcc->m_dAccumKlist.GetLength() )
+		ARRAY_FOREACH ( iSeg, dSegments )
+	{
+		RtSegment_t * pSeg = dSegments[iSeg];
+		if ( !pSeg->m_bTlsKlist )
+			continue; // should be fresh enough
+
+		// this segment was not created by this txn
+		// so we need to merge additional K-list from current txn into it
+		ARRAY_FOREACH ( j, pAcc->m_dAccumKlist )
+		{
+			SphDocID_t uDocid = pAcc->m_dAccumKlist[j];
+			if ( pSeg->HasDocid ( uDocid ) )
+			{
+				pSeg->m_dKlist.Add ( uDocid );
+				pSeg->m_iAliveRows--;
+			}
+		}
+
+		// we did not check for existance in K-list, only in segment
+		// so need to use Uniq(), not just Sort()
+		pSeg->m_dKlist.Uniq ();
+
+		// mark as good
+		pSeg->m_bTlsKlist = false;
+	}
+
+	// go live!
+	Swap ( m_pSegments, dSegments );
+
+	// we can kill retired segments now
 	ARRAY_FOREACH ( i, dToKill )
-		SafeDelete ( dToKill[i] ); // unused now
+		SafeDelete ( dToKill[i] );
+
+	// update stats
+	m_tStats.m_iTotalDocuments += pAcc->m_iAccumDocs;
+
+	// finish cleaning up and release accumulator
+	pAcc->m_pIndex = NULL;
+	pAcc->m_iAccumDocs = 0;
+	pAcc->m_dAccumKlist.Reset();
+
+	// all done, unlock
+	Verify ( m_tRwlock.Unlock() );
+	Verify ( m_tWriterMutex.Unlock() );
 }
 
 
-void RtIndex_t::DeleteDocument ( SphDocID_t uDoc )
+bool RtIndex_t::DeleteDocument ( SphDocID_t uDoc )
 {
-	RLOCK ( this );
-	ARRAY_FOREACH ( i, m_pSegments )
-		m_pSegments[i]->DeleteDocument ( uDoc );
+	RtAccum_t * pAcc = AcquireAccum();
+	if ( pAcc )
+		pAcc->m_dAccumKlist.Add ( uDoc );
+	return ( pAcc!=NULL );
 }
 
 
@@ -1227,6 +1407,9 @@ struct Checkpoint_t
 
 void RtIndex_t::DumpToDisk ( const char * sFilename )
 {
+	Verify ( m_tWriterMutex.Lock() );
+	Verify ( m_tRwlock.WriteLock() );
+
 	CSphString sName, sError;
 
 	CSphWriter wrHits, wrDocs, wrDict, wrRows;
@@ -1247,8 +1430,6 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 		m_pSegments.Sort ( CmpSegments_fn() );
 		RtSegment_t * pSeg1 = m_pSegments.Pop();
 		RtSegment_t * pSeg2 = m_pSegments.Pop();
-		pSeg1->OptimizeKlist ();
-		pSeg2->OptimizeKlist ();
 		m_pSegments.Add ( MergeSegments ( pSeg1, pSeg2 ) );
 		SafeDelete ( pSeg1 );
 		SafeDelete ( pSeg2 );
@@ -1348,6 +1529,9 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 
 	int64_t tmDump = sphMicroTimer ();
 	printf ( "dump done in %s sec\n", FormatMicrotime ( tmDump-tmMerged ) );
+
+	Verify ( m_tRwlock.Unlock() );
+	Verify ( m_tWriterMutex.Lock() );
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1389,8 +1573,6 @@ public:
 			}
 
 			if ( m_pSeg->m_dKlist.BinarySearch ( pDoc->m_uDocID ) )
-				continue;
-			if ( m_pSeg->m_dKlistAccum.Contains ( pDoc->m_uDocID ) )
 				continue;
 
 			m_tMatch.m_iDocID = pDoc->m_uDocID;
@@ -1554,7 +1736,7 @@ const CSphRowitem * RtIndex_t::FindDocinfo ( const RtSegment_t * pSeg, SphDocID_
 
 bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int iSorters, ISphMatchSorter ** ppSorters ) const
 {
-	RLOCK ( this );
+	m_tRwlock.ReadLock ();
 
 	/*!COMMIT*/
 	assert ( pQuery );
@@ -1565,6 +1747,7 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	if ( !m_pSegments.GetLength() )
 	{
 		pResult->m_iQueryTime = 0;
+		m_tRwlock.Unlock ();
 		return true;
 	}
 
@@ -1594,6 +1777,7 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	if ( !sphParseExtendedQuery ( tParsed, pQuery->m_sQuery.cstr(), GetTokenizer(), GetSchema(), m_pDict ) )
 	{
 		pResult->m_sError = tParsed.m_sParseError;
+		m_tRwlock.Unlock ();
 		return false;
 	}
 
@@ -1601,7 +1785,10 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	// must happen before index-level reject, in order to build proper keyword stats
 	CSphScopedPtr<ISphRanker> pRanker ( sphCreateRanker ( tParsed.m_pRoot, pQuery->m_eRanker, pResult, tTermSetup ) );
 	if ( !pRanker.Ptr() )
+	{
+		m_tRwlock.Unlock ();
 		return false;
+	}
 
 	ARRAY_FOREACH ( iSeg, m_pSegments )
 	{
@@ -1628,6 +1815,7 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 
 	// query timer
 	pResult->m_iQueryTime = int( ( sphMicroTimer()-tmQueryStart )/1000 );
+	m_tRwlock.Unlock ();
 	return true;
 }
 
@@ -1648,6 +1836,16 @@ bool RtIndex_t::GetKeywords ( CSphVector <CSphKeywordInfo> &, const char *, bool
 ISphRtIndex * sphCreateIndexRT ( const CSphSchema & tSchema )
 {
 	return new RtIndex_t ( tSchema );
+}
+
+void sphRTInit ()
+{
+	Verify ( RtSegment_t::m_tSegmentSeq.Init() );
+}
+
+void sphRTDone ()
+{
+	Verify ( RtSegment_t::m_tSegmentSeq.Done() );
 }
 
 //

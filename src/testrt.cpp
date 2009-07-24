@@ -113,19 +113,14 @@ void DoIndexing ( CSphSource * pSrc, ISphRtIndex * pIndex )
 		fTotalMB*1000000.0f/(tmEnd-tmStart) );
 	printf ( "commit-docs %d, avg %d.%03d msec, max %d.%03d msec\n", COMMIT_STEP,
 		int(tmAvgCommit/1000), int(tmAvgCommit%1000),
-		int(tmMaxCommit/1000), int(tmMaxCommit/1000) );
+		int(tmMaxCommit/1000), int(tmMaxCommit%1000) );
 	g_fTotalMB += fTotalMB;
 }
 
 
-void main ()
+CSphSource * SpawnSource ( const char * sQuery, ISphTokenizer * pTok, CSphDict * pDict )
 {
-	CSphString sError;
-
 	CSphSource_MySQL * pSrc = new CSphSource_MySQL ( "test" );
-	CSphDictSettings tDictSettings;
-	ISphTokenizer * pTok = sphCreateUTF8Tokenizer();
-	CSphDict * pDict = sphCreateDictionaryCRC ( tDictSettings, pTok, sError );
 	pSrc->SetTokenizer ( pTok );
 	pSrc->SetDict ( pDict );
 
@@ -134,7 +129,7 @@ void main ()
 	tParams.m_sUser = "root";
 	tParams.m_sDB = "lj";
 	tParams.m_dQueryPre.Add ( "SET NAMES utf8" );
-	tParams.m_sQuery = "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM rt1 WHERE id<=10000";
+	tParams.m_sQuery = sQuery;
 
 	CSphColumnInfo tCol;
 	tCol.m_eAttrType = SPH_ATTR_INTEGER;
@@ -144,8 +139,34 @@ void main ()
 	tCol.m_sName = "published";
 	tParams.m_dAttrs.Add ( tCol );
 
-	// initial indexing
 	SetupIndexing ( pSrc, tParams );
+	return pSrc;
+}
+
+
+static ISphRtIndex * g_pIndex = NULL;
+
+
+SphThreadFunc_t IndexingThread ( void * pArg )
+{
+	CSphSource * pSrc = (CSphSource *) pArg;
+	DoIndexing ( pSrc, g_pIndex );
+	return 0;
+}
+
+
+void main ()
+{
+	CSphString sError;
+	CSphDictSettings tDictSettings;
+
+	ISphTokenizer * pTok = sphCreateUTF8Tokenizer();
+	CSphDict * pDict = sphCreateDictionaryCRC ( tDictSettings, pTok, sError );
+	CSphSource * pSrc = SpawnSource ( "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM rt1 WHERE id<=10000 AND id%2=0", pTok, pDict );
+
+	ISphTokenizer * pTok2 = sphCreateUTF8Tokenizer();
+	CSphDict * pDict2 = sphCreateDictionaryCRC ( tDictSettings, pTok, sError );
+	CSphSource * pSrc2 = SpawnSource ( "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM rt1 WHERE id<=10000 AND id%2=1", pTok2, pDict2 );
 
 	CSphSchema tSrcSchema;
 	if ( !pSrc->UpdateSchema ( &tSrcSchema, sError ) )
@@ -156,12 +177,20 @@ void main ()
 	for ( int i=0; i<tSrcSchema.GetAttrsCount(); i++ )
 		tSchema.AddAttr ( tSrcSchema.GetAttr(i), false );
 
+	sphRTInit ();
 	ISphRtIndex * pIndex = sphCreateIndexRT ( tSchema );
-	pIndex->SetTokenizer ( pTok ); // index will own them from now on
+	pIndex->SetTokenizer ( pTok ); // index will own this pair from now on
 	pIndex->SetDictionary ( pDict );
+	g_pIndex = pIndex;
 
+	// initial indexing
 	int64_t tmStart = sphMicroTimer();
-	DoIndexing ( pSrc, pIndex );
+
+	SphThread_t t1, t2;
+	sphThreadCreate ( &t1, IndexingThread, pSrc );
+	sphThreadCreate ( &t2, IndexingThread, pSrc2 );
+	sphThreadJoin ( &t1 );
+	sphThreadJoin ( &t2 );
 
 #if 0
 	// update
@@ -196,6 +225,7 @@ void main ()
 #endif
 
 	SafeDelete ( pIndex );
+	sphRTDone ();
 }
 
 //

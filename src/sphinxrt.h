@@ -7,18 +7,38 @@
 
 #include "sphinx.h"
 
+/// RAM based updateable backend interface
 class ISphRtIndex : public CSphIndex
 {
 public:
-	explicit		ISphRtIndex ( const char * sName ) : CSphIndex ( sName) {}
+	explicit ISphRtIndex ( const char * sName ) : CSphIndex ( sName) {}
 
-	virtual void	AddDocument ( const CSphVector<CSphString> & dFields, const CSphMatch & tDoc ) = 0;
-	virtual void	AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphMatch & tDoc ) = 0;
-	virtual void	DeleteDocument ( SphDocID_t uDoc ) = 0;
-	virtual void	Commit () = 0;
-	virtual void	DumpToDisk ( const char * sFilename ) = 0;
+	/// insert/update document in current txn
+	/// fails in case of two open txns to different indexes
+	virtual bool AddDocument ( const CSphVector<CSphString> & dFields, const CSphMatch & tDoc ) = 0;
+
+	/// insert/update document in current txn
+	/// fails in case of two open txns to different indexes
+	virtual bool AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphMatch & tDoc ) = 0;
+
+	/// delete document in current txn
+	/// fails in case of two open txns to different indexes
+	virtual bool DeleteDocument ( SphDocID_t uDoc ) = 0;
+
+	/// commit pending changes
+	virtual void Commit () = 0;
+
+	/// dump index data to disk
+	virtual void DumpToDisk ( const char * sFilename ) = 0;
 };
 
+/// initialize subsystem
+void sphRTInit ();
+
+/// deinitialize subsystem
+void sphRTDone ();
+
+/// RT index factory
 ISphRtIndex * sphCreateIndexRT ( const CSphSchema & tSchema );
 
 #endif // _sphinxrt_
