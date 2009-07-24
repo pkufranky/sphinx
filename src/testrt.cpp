@@ -147,11 +147,10 @@ CSphSource * SpawnSource ( const char * sQuery, ISphTokenizer * pTok, CSphDict *
 static ISphRtIndex * g_pIndex = NULL;
 
 
-SphThreadFunc_t IndexingThread ( void * pArg )
+void IndexingThread ( void * pArg )
 {
 	CSphSource * pSrc = (CSphSource *) pArg;
 	DoIndexing ( pSrc, g_pIndex );
-	return 0;
 }
 
 
