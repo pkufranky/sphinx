@@ -151,7 +151,7 @@ public:
 	int							m_iAliveRows;	///< number of alive (non-killed) rows
 	CSphVector<CSphRowitem>		m_dRows;		///< row data storage
 	CSphVector<SphDocID_t>		m_dKlist;		///< sorted K-list
-	bool						m_bTlsKlist;	///< whether to apply TLS K-list during merge (only used during Commit())
+	bool						m_bTlsKlist;	///< whether to apply TLS K-list during merge (must only be used by writer during Commit())
 
 	RtSegment_t ()
 	{
@@ -994,7 +994,8 @@ void RtIndex_t::MergeWord ( RtSegment_t * pSeg, const RtSegment_t * pSrc1, const
 		if ( pDoc1 && pDoc2 && pDoc1->m_uDocID==pDoc2->m_uDocID )
 		{
 			// dupe, must (!) be killed in the first segment, might be in both
-			assert ( pSrc1->m_dKlist.BinarySearch ( pDoc1->m_uDocID ) );
+			assert ( pSrc1->m_dKlist.BinarySearch ( pDoc1->m_uDocID )
+				|| ( pSrc1->m_bTlsKlist && g_pTlsAccum && g_pTlsAccum->m_dAccumKlist.BinarySearch ( pDoc1->m_uDocID ) ) );
 			if ( !pSrc2->m_dKlist.BinarySearch ( pDoc2->m_uDocID ) )
 				CopyDoc ( pSeg, tOutDoc, &tWord, pSrc2, pDoc2 );
 			pDoc2 = tIn2.UnzipDoc();
@@ -1043,7 +1044,7 @@ protected:
 	const int m_iStride;
 
 public:
-	explicit RtRowIterator_t ( const RtSegment_t * pSeg, int iStride )
+	explicit RtRowIterator_t ( const RtSegment_t * pSeg, int iStride, bool bWriter )
 		: m_pRow ( &pSeg->m_dRows[0] )
 		, m_pRowMax ( &pSeg->m_dRows[0] + pSeg->m_dRows.GetLength() )
 		, m_pKlist ( NULL )
@@ -1058,8 +1059,9 @@ public:
 			m_pKlistMax = m_pKlist + pSeg->m_dKlist.GetLength();
 		}
 
+		// FIXME? OPTIMIZE? must not scan tls (open txn) in readers; can implement lighter iterator
 		// FIXME? OPTIMIZE? maybe we should just rely on the segment order and don't scan tls klist here
-		if ( pSeg->m_bTlsKlist && g_pTlsAccum && g_pTlsAccum->m_dAccumKlist.GetLength() )
+		if ( bWriter && pSeg->m_bTlsKlist && g_pTlsAccum && g_pTlsAccum->m_dAccumKlist.GetLength() )
 		{
 			m_pTlsKlist = &g_pTlsAccum->m_dAccumKlist[0];
 			m_pTlsKlistMax = m_pTlsKlist + g_pTlsAccum->m_dAccumKlist.GetLength();
@@ -1134,8 +1136,8 @@ RtSegment_t * RtIndex_t::MergeSegments ( const RtSegment_t * pSeg1, const RtSegm
 	// we might need less because of dupes, but we can not know yet
 	dRows.Reserve ( pSeg1->m_dRows.GetLength() + pSeg2->m_dRows.GetLength() );
 
-	RtRowIterator_t tIt1 ( pSeg1, m_iStride );
-	RtRowIterator_t tIt2 ( pSeg2, m_iStride );
+	RtRowIterator_t tIt1 ( pSeg1, m_iStride, true );
+	RtRowIterator_t tIt2 ( pSeg2, m_iStride, true );
 
 	const CSphRowitem * pRow1 = tIt1.GetNextAliveRow();
 	const CSphRowitem * pRow2 = tIt2.GetNextAliveRow();
@@ -1781,28 +1783,59 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	// FIXME! setup overrides
 
 	// do searching
-	ARRAY_FOREACH ( iSeg, m_pSegments )
+	if ( pQuery->m_eMode==SPH_MATCH_FULLSCAN || pQuery->m_sQuery.IsEmpty() )
 	{
-		if ( iSeg!=0 )
+		// full scan
+		// FIXME? OPTIMIZE? add shortcuts here too?
+		CSphMatch tMatch;
+		tMatch.Reset ( pResult->m_tSchema.GetDynamicSize() );
+		tMatch.m_iWeight = 1;
+
+		ARRAY_FOREACH ( iSeg, m_pSegments )
 		{
-			tTermSetup.m_pSeg = m_pSegments[iSeg];
-			pRanker->Reset ( tTermSetup );
+			RtRowIterator_t tIt ( m_pSegments[iSeg], m_iStride, false );
+			for ( ;; )
+			{
+				const CSphRowitem * pRow = tIt.GetNextAliveRow();
+				if ( !pRow )
+					break;
+
+				tMatch.m_iDocID = DOCINFO2ID(pRow);
+				tMatch.m_pStatic = DOCINFO2ATTRS(pRow); // FIXME! overrides
+
+				tCtx.EarlyCalc ( tMatch );
+				if ( !tCtx.m_pFilter || tCtx.m_pFilter->Eval ( tMatch ) )
+					for ( int iSorter=0; iSorter<iSorters; iSorter++ )
+						ppSorters[iSorter]->Push ( tMatch );
+			}
 		}
 
-		// for lookups to work
-		tCtx.m_pIndexData = m_pSegments[iSeg];
-
-		CSphMatch * pMatch = pRanker->GetMatchesBuffer();
-		for ( ;; )
+	} else
+	{
+		// query matching
+		ARRAY_FOREACH ( iSeg, m_pSegments )
 		{
-			int iMatches = pRanker->GetMatches ( m_iWeights, m_dWeights );
-			if ( iMatches<=0 )
-				break;
-			for ( int i=0; i<iMatches; i++ )
+			if ( iSeg!=0 )
 			{
-				CopyDocinfo ( pMatch[i], FindDocinfo ( m_pSegments[iSeg], pMatch[i].m_iDocID ) );
-				for ( int iSorter=0; iSorter<iSorters; iSorter++ )
-					ppSorters[iSorter]->Push ( pMatch[i] );
+				tTermSetup.m_pSeg = m_pSegments[iSeg];
+				pRanker->Reset ( tTermSetup );
+			}
+
+			// for lookups to work
+			tCtx.m_pIndexData = m_pSegments[iSeg];
+
+			CSphMatch * pMatch = pRanker->GetMatchesBuffer();
+			for ( ;; )
+			{
+				int iMatches = pRanker->GetMatches ( m_iWeights, m_dWeights );
+				if ( iMatches<=0 )
+					break;
+				for ( int i=0; i<iMatches; i++ )
+				{
+					CopyDocinfo ( pMatch[i], FindDocinfo ( m_pSegments[iSeg], pMatch[i].m_iDocID ) );
+					for ( int iSorter=0; iSorter<iSorters; iSorter++ )
+						ppSorters[iSorter]->Push ( pMatch[i] );
+				}
 			}
 		}
 	}
