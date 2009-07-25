@@ -1038,38 +1038,73 @@ protected:
 	const CSphRowitem * m_pRowMax;
 	const SphDocID_t * m_pKlist;
 	const SphDocID_t * m_pKlistMax;
+	const SphDocID_t * m_pTlsKlist;
+	const SphDocID_t * m_pTlsKlistMax;
 	const int m_iStride;
 
 public:
 	explicit RtRowIterator_t ( const RtSegment_t * pSeg, int iStride )
 		: m_pRow ( &pSeg->m_dRows[0] )
 		, m_pRowMax ( &pSeg->m_dRows[0] + pSeg->m_dRows.GetLength() )
-		, m_pKlist ( pSeg->m_dKlist.GetLength()==0 ? NULL : &pSeg->m_dKlist[0] )
-		, m_pKlistMax ( pSeg->m_dKlist.GetLength()==0 ? NULL : &pSeg->m_dKlist[0] + pSeg->m_dKlist.GetLength() )
+		, m_pKlist ( NULL )
+		, m_pKlistMax ( NULL )
+		, m_pTlsKlist ( NULL )
+		, m_pTlsKlistMax ( NULL )
 		, m_iStride ( iStride )
-	{}
+	{
+		if ( pSeg->m_dKlist.GetLength() )
+		{
+			m_pKlist = &pSeg->m_dKlist[0];
+			m_pKlistMax = m_pKlist + pSeg->m_dKlist.GetLength();
+		}
+
+		// FIXME? OPTIMIZE? maybe we should just rely on the segment order and don't scan tls klist here
+		if ( pSeg->m_bTlsKlist && g_pTlsAccum && g_pTlsAccum->m_dAccumKlist.GetLength() )
+		{
+			m_pTlsKlist = &g_pTlsAccum->m_dAccumKlist[0];
+			m_pTlsKlistMax = m_pTlsKlist + g_pTlsAccum->m_dAccumKlist.GetLength();
+		}
+	}
 
 	const CSphRowitem * GetNextAliveRow ()
 	{
-		if ( m_pRow>=m_pRowMax )
-			return NULL;
-
-		while ( m_pKlist<m_pKlistMax )
+		// while there are rows and k-list entries
+		while ( m_pRow<m_pRowMax && ( m_pKlist<m_pKlistMax || m_pTlsKlist<m_pTlsKlistMax ) )
 		{
+			// get next candidate id
 			SphDocID_t uID = DOCINFO2ID(m_pRow);
+
+			// check if segment k-list kills it
 			while ( m_pKlist<m_pKlistMax && *m_pKlist<uID )
 				m_pKlist++;
 
-			assert ( m_pKlist>=m_pKlistMax || *m_pKlist>=uID );
-			if (!( m_pKlist<m_pKlistMax && *m_pKlist==uID ))
-				break;
+			if ( m_pKlist<m_pKlistMax && *m_pKlist==uID )
+			{
+				m_pKlist++;
+				m_pRow += m_iStride;
+				continue;
+			}
 
-			m_pKlist++;
-			m_pRow += m_iStride;
-			if ( m_pRow>=m_pRowMax )
-				return NULL;
+			// check if txn k-list kills it
+			while ( m_pTlsKlist<m_pTlsKlistMax && *m_pTlsKlist<uID )
+				m_pTlsKlist++;
+
+			if ( m_pTlsKlist<m_pTlsKlistMax && *m_pTlsKlist==uID )
+			{
+				m_pTlsKlist++;
+				m_pRow += m_iStride;
+				continue;
+			}
+
+			// oh, so nobody kills it
+			break;
 		}
 
+		// oops, out of rows
+		if ( m_pRow>=m_pRowMax )
+			return NULL;
+
+		// got it, and it's alive!
 		m_pRow += m_iStride;
 		return m_pRow-m_iStride;
 	}
