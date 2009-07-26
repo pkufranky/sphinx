@@ -215,10 +215,10 @@ static KeyDesc_t g_dKeysIndex[] =
 	{ "expand_keywords",		0, NULL },
 	{ "hitless_words",			KEY_LIST, NULL },
 	{ "hit_format",				0, NULL },
-	{ "rt_field",				0, NULL },
-	{ "rt_attr_int",			0, NULL },
-	{ "rt_attr_bigint",			0, NULL },
-	{ "rt_attr_float",			0, NULL },
+	{ "rt_field",				KEY_LIST, NULL },
+	{ "rt_attr_int",			KEY_LIST, NULL },
+	{ "rt_attr_bigint",			KEY_LIST, NULL },
+	{ "rt_attr_float",			KEY_LIST, NULL },
 	{ NULL,						0, NULL }
 };
 

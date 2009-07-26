@@ -167,6 +167,14 @@ where_item:
 				pParser->m_bGotQuery = true;
 			}
 		}
+	| TOK_ID '=' TOK_CONST_INT
+		{
+			CSphFilterSettings tFilter;
+			tFilter.m_sAttrName = "@id";
+			tFilter.m_eType = SPH_FILTER_VALUES;
+			tFilter.m_dValues.Add ( $3.m_iValue );
+			pParser->m_pQuery->m_dFilters.Add ( tFilter );
+		}
 	| TOK_IDENT '=' TOK_CONST_INT
 		{
 			CSphFilterSettings tFilter;
