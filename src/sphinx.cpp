@@ -562,7 +562,7 @@ public:
 	{
 	}
 
-	CSphAutofile ( const char * sName, int iMode, CSphString & sError, bool bTemp=false )
+	CSphAutofile ( const CSphString & sName, int iMode, CSphString & sError, bool bTemp=false )
 		: m_iFD ( -1 )
 		, m_bTemporary ( false )
 		, m_pProgress ( NULL )
@@ -576,16 +576,16 @@ public:
 		Close ();
 	}
 
-	int Open ( const char * szName, int iMode, CSphString & sError, bool bTemp=false )
+	int Open ( const CSphString & sName, int iMode, CSphString & sError, bool bTemp=false )
 	{
 		assert ( m_iFD == -1 && m_sFilename.IsEmpty () );
-		assert ( szName );
+		assert ( !sName.IsEmpty() );
 
-		m_iFD = ::open ( szName, iMode, 0644 );
-		m_sFilename = szName; // not exactly sure why is this uncoditional. for error reporting later, i suppose
+		m_iFD = ::open ( sName.cstr(), iMode, 0644 );
+		m_sFilename = sName; // not exactly sure why is this uncoditional. for error reporting later, i suppose
 
 		if ( m_iFD<0 )
-			sError.SetSprintf ( "failed to open %s: %s", szName, strerror(errno) );
+			sError.SetSprintf ( "failed to open %s: %s", sName.cstr(), strerror(errno) );
 		else
 			m_bTemporary = bTemp; // only if we managed to actually open it
 
@@ -970,7 +970,7 @@ public:
 				CSphAutoreader ( BYTE * pBuf=NULL, int iSize=0 ) : CSphReader_VLN ( pBuf, iSize ) {}
 				~CSphAutoreader ();
 
-	bool		Open ( const char * sFilename, CSphString & sError );
+	bool		Open ( const CSphString & sFilename, CSphString & sError );
 	SphOffset_t	GetFilesize ();
 };
 
@@ -1313,8 +1313,6 @@ static void WriteFileInfo ( CSphWriter & tWriter, const CSphSavedFile & tInfo )
 }
 
 
-
-	
 /// this is my actual VLN-compressed phrase index implementation
 struct CSphIndex_VLN : CSphIndex
 {
@@ -1450,7 +1448,8 @@ private:
 	static int					m_iIndexTagSeq;			///< static ids sequence
 
 private:
-	const char *				GetIndexFileName ( const char * sExt ) const;	///< WARNING, non-reenterable, static buffer!
+	CSphString					GetIndexFileName ( const char * sExt ) const;
+
 	int							AdjustMemoryLimit ( int iMemoryLimit );
 
 	int							cidxWriteRawVLB ( int fd, CSphWordHit * pHit, int iHits, DWORD * pDocinfo, int Docinfos, int iStride );
@@ -1461,8 +1460,8 @@ private:
 	void						ReadSchemaColumn ( CSphReader_VLN & rdInfo, CSphColumnInfo & tCol );
 
 	bool						ParsedMultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int iSorters, ISphMatchSorter ** ppSorters, const XQNode_t * pRoot, CSphDict * pDict ) const;
+	bool						MultiScan ( CSphQuery * pQuery, CSphQueryResult * pResult, int iSorters, ISphMatchSorter ** ppSorters ) const;
 	bool						MatchExtended ( CSphQueryContext * pCtx, const CSphQuery * pQuery, int iSorters, ISphMatchSorter ** ppSorters, ISphRanker * pRanker ) const;
-	void						MatchFullScan ( CSphQueryContext * pCtx, const CSphQuery * pQuery, int iSorters, ISphMatchSorter ** ppSorters, const DiskIndexQwordSetup_c & tTermSetup ) const;
 
 	const DWORD *				FindDocinfo ( SphDocID_t uDocID ) const;
 	void						CopyDocinfo ( CSphQueryContext * pCtx, CSphMatch & tMatch, const DWORD * pFound ) const;
@@ -4790,9 +4789,9 @@ void CSphWriter::SetBufferSize ( int iBufferSize )
 }
 
 
-bool CSphWriter::OpenFile ( const char * sName, CSphString & sErrorBuffer )
+bool CSphWriter::OpenFile ( const CSphString & sName, CSphString & sErrorBuffer )
 {
-	assert ( sName );
+	assert ( !sName.IsEmpty() );
 	assert ( m_iFD<0 && "already open" );
 
 	m_bOwnFile = true;
@@ -4810,7 +4809,7 @@ bool CSphWriter::OpenFile ( const char * sName, CSphString & sErrorBuffer )
 	m_bError = ( m_iFD<0 );
 
 	if ( m_bError )
-		m_pError->SetSprintf ( "failed to create %s: %s" , sName, strerror(errno) );
+		m_pError->SetSprintf ( "failed to create %s: %s" , sName.cstr(), strerror(errno) );
 
 	return !m_bError;
 }
@@ -5338,19 +5337,19 @@ CSphAutoreader::~CSphAutoreader ()
 }
 
 
-bool CSphAutoreader::Open ( const char * sFilename, CSphString & sError )
+bool CSphAutoreader::Open ( const CSphString & sFilename, CSphString & sError )
 {
 	assert ( m_iFD<0 );
-	assert ( sFilename );
+	assert ( !sFilename.IsEmpty() );
 
-	m_iFD = ::open ( sFilename, SPH_O_READ, 0644 );
+	m_iFD = ::open ( sFilename.cstr(), SPH_O_READ, 0644 );
 	m_iPos = 0;
 	m_iBuffPos = 0;
 	m_iBuffUsed = 0;
 	m_sFilename = sFilename;
 
 	if ( m_iFD<0 )
-		sError.SetSprintf ( "failed to open %s: %s", sFilename, strerror(errno) );
+		sError.SetSprintf ( "failed to open %s: %s", sFilename.cstr(), strerror(errno) );
 	return ( m_iFD>=0 );
 }
 
@@ -6789,11 +6788,11 @@ void sphSortDocinfos ( DWORD * pBuf, int iCount, int iStride )
 }
 
 
-const char * CSphIndex_VLN::GetIndexFileName ( const char * sExt ) const
+CSphString CSphIndex_VLN::GetIndexFileName ( const char * sExt ) const
 {
-	static char sBuf [ SPH_MAX_FILENAME_LEN ];
-	snprintf ( sBuf, sizeof(sBuf), "%s.%s", m_sFilename.cstr(), sExt );
-	return sBuf;
+	CSphString sRes;
+	sRes.SetSprintf ( "%s.%s", m_sFilename.cstr(), sExt );
+	return sRes;
 }
 
 
@@ -9656,7 +9655,7 @@ public:
 		, m_iEntries ( 0 )
 	{}
 
-	void Setup ( const char * sFilename, CSphString & sError )
+	void Setup ( const CSphString & sFilename, CSphString & sError )
 	{
 		m_tFile.Open ( sFilename, SPH_O_READ, sError );
 		m_tReader.SetFile ( m_tFile );
@@ -10646,16 +10645,74 @@ bool CSphIndex_VLN::MatchExtended ( CSphQueryContext * pCtx, const CSphQuery * p
 
 //////////////////////////////////////////////////////////////////////////
 
-void CSphIndex_VLN::MatchFullScan ( CSphQueryContext * pCtx, const CSphQuery * pQuery, int iSorters, ISphMatchSorter ** ppSorters, const DiskIndexQwordSetup_c & tSetup ) const
+bool CSphIndex_VLN::MultiScan ( CSphQuery * pQuery, CSphQueryResult * pResult, int iSorters, ISphMatchSorter ** ppSorters ) const
 {
+	assert ( pQuery->m_eMode==SPH_MATCH_FULLSCAN || pQuery->m_sQuery.IsEmpty() );
+
+	// check if index is ready
+	if ( m_bPreread.IsEmpty() || !m_bPreread[0] )
+	{
+		pResult->m_sError = "index not preread";
+		return false;
+	}
+
+	// check if index supports scans
+	if ( m_uDocinfo<=0 || m_tSettings.m_eDocinfo!=SPH_DOCINFO_EXTERN || m_pDocinfo.IsEmpty() || !m_tSchema.GetAttrsCount() )
+	{
+		pResult->m_sError = "fullscan requires extern docinfo";
+		return false;
+	}
+
+	// check if index has data
+	if ( !m_tStats.m_iTotalDocuments )
+		return true;
+
+	// start counting
+	pResult->m_iQueryTime = 0;
+	int64_t tmQueryStart = sphMicroTimer();
+
+	// setup calculations and result schema
+	CSphQueryContext tCtx;
+	if ( !tCtx.SetupCalc ( pResult, ppSorters[0]->GetSchema(), m_tSchema, GetMVAPool() ) )
+		return false;
+
+	// setup filters
+	if ( !tCtx.CreateFilters ( pQuery, pResult->m_tSchema, GetMVAPool(), pResult->m_sError ) )
+		return false;
+
+	// check if we can early reject the whole index
+	if ( tCtx.m_pFilter && m_pDocinfoIndex.GetLength() )
+	{
+		DWORD uStride = DOCINFO_IDSIZE + m_tSchema.GetRowSize();
+		DWORD * pMinEntry = const_cast<DWORD*> ( &m_pDocinfoIndex [ 2*m_uDocinfoIndex*uStride ] );
+		DWORD * pMaxEntry = pMinEntry + uStride;
+
+		if ( !tCtx.m_pFilter->EvalBlock ( pMinEntry, pMaxEntry ) )
+		{
+			pResult->m_iQueryTime = int( ( sphMicroTimer()-tmQueryStart )/1000 );
+			return true;
+		}
+	}
+
+	// setup lookup
+	tCtx.m_bEarlyLookup = false;
+	tCtx.m_bLateLookup = true;
+
+	// setup sorters vs. MVA
+	for ( int i=0; i<iSorters; i++ )
+		(ppSorters[i])->SetMVAPool ( m_pMva.GetWritePtr() );
+
+	// setup overrides
+	if ( !tCtx.SetupOverrides ( pQuery, pResult, m_tSchema ) )
+		return false;
+
+	// do scan
 	bool bRandomize = ppSorters[0]->m_bRandomize;
 	int iCutoff = pQuery->m_iCutoff;
 
 	CSphMatch tMatch;
-	tMatch.Reset ( tSetup.m_iDynamicRowitems );
+	tMatch.Reset ( pResult->m_tSchema.GetDynamicSize() );
 	tMatch.m_iWeight = 1;
-
-	pCtx->m_bEarlyLookup = false; // we'll do it manually
 
 	DWORD uStride = DOCINFO_IDSIZE + m_tSchema.GetRowSize();
 	for ( DWORD uIndexEntry=0; uIndexEntry<m_uDocinfoIndex; uIndexEntry++ )
@@ -10676,7 +10733,7 @@ void CSphIndex_VLN::MatchFullScan ( CSphQueryContext * pCtx, const CSphQuery * p
 			break;
 
 		// check applicable filters
-		if ( pCtx->m_pFilter && !pCtx->m_pFilter->EvalBlock ( pMin, pMax ) )
+		if ( tCtx.m_pFilter && !tCtx.m_pFilter->EvalBlock ( pMin, pMax ) )
 			continue;
 
 		///////////////////////
@@ -10689,15 +10746,15 @@ void CSphIndex_VLN::MatchFullScan ( CSphQueryContext * pCtx, const CSphQuery * p
 		for ( const DWORD * pDocinfo=pBlockStart; pDocinfo<=pBlockEnd; pDocinfo+=uStride )
 		{
 			tMatch.m_iDocID = DOCINFO2ID(pDocinfo);
-			CopyDocinfo ( pCtx, tMatch, pDocinfo );
+			CopyDocinfo ( &tCtx, tMatch, pDocinfo );
 
 			// early filter only (no late filters in full-scan because of no @weight)
-			pCtx->EarlyCalc ( tMatch );
-			if ( pCtx->m_pFilter && !pCtx->m_pFilter->Eval ( tMatch ) )
+			tCtx.EarlyCalc ( tMatch );
+			if ( tCtx.m_pFilter && !tCtx.m_pFilter->Eval ( tMatch ) )
 				continue;
 
 			// submit match to sorters
-			pCtx->LateCalc ( tMatch );
+			tCtx.LateCalc ( tMatch );
 			if ( bRandomize )
 				tMatch.m_iWeight = ( sphRand() & 0xffff );
 
@@ -10708,12 +10765,18 @@ void CSphIndex_VLN::MatchFullScan ( CSphQueryContext * pCtx, const CSphQuery * p
 			// handle cutoff
 			if ( bNewMatch )
 				if ( --iCutoff==0 )
-			{
-				uIndexEntry = m_uDocinfoIndex; // outer break
-				break;
-			}
+				{
+					uIndexEntry = m_uDocinfoIndex; // outer break
+					break;
+				}
 		}
 	}
+
+	// done
+	pResult->m_pMva = m_pMva.GetWritePtr();
+	pResult->m_pStrings = m_pStrings.GetWritePtr();
+	pResult->m_iQueryTime = int( ( sphMicroTimer()-tmQueryStart )/1000 );
+	return true;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -10901,21 +10964,21 @@ bool DiskIndexQwordSetup_c::Setup ( ISphQword * pWord ) const
 
 bool CSphIndex_VLN::Lock ()
 {
-	const char * sName = GetIndexFileName ( "spl" );
+	CSphString sName = GetIndexFileName("spl");
 
 	if ( m_iLockFD<0 )
 	{
-		m_iLockFD = ::open ( sName, SPH_O_NEW, 0644 );
+		m_iLockFD = ::open ( sName.cstr(), SPH_O_NEW, 0644 );
 		if ( m_iLockFD<0 )
 		{
-			m_sLastError.SetSprintf ( "failed to open %s: %s", sName, strerror(errno) );
+			m_sLastError.SetSprintf ( "failed to open %s: %s", sName.cstr(), strerror(errno) );
 			return false;
 		}
 	}
 
 	if ( !sphLockEx ( m_iLockFD, false ) )
 	{
-		m_sLastError.SetSprintf ( "failed to lock %s: %s", sName, strerror(errno) );
+		m_sLastError.SetSprintf ( "failed to lock %s: %s", sName.cstr(), strerror(errno) );
 		::close ( m_iLockFD );
 		return false;
 	}
@@ -10929,7 +10992,7 @@ void CSphIndex_VLN::Unlock()
 	if ( m_iLockFD>=0 )
 	{
 		::close ( m_iLockFD );
-		::unlink ( GetIndexFileName ( "spl" ) );
+		::unlink ( GetIndexFileName("spl").cstr() );
 		m_iLockFD = -1;
 	}
 }
@@ -11287,21 +11350,22 @@ const CSphSchema * CSphIndex_VLN::Prealloc ( bool bMlock, CSphString & sWarning 
 	m_pKillList.SetMlock ( bMlock );
 
 	// preload schema
-	if ( !LoadHeader ( GetIndexFileName("sph"), sWarning ) )
+	if ( !LoadHeader ( GetIndexFileName("sph").cstr(), sWarning ) )
 		return NULL;
 
 	if ( m_bUse64!=USE_64BIT )
 	{
 		m_sLastError.SetSprintf ( "'%s' is id%d, and this binary is id%d",
-			GetIndexFileName ( "sph" ), m_bUse64 ? 64 : 32, USE_64BIT ? 64 : 32 );
+			GetIndexFileName("sph").cstr(),
+			m_bUse64 ? 64 : 32, USE_64BIT ? 64 : 32 );
 		return NULL;
 	}
 
 	// verify that data files are readable
-	if ( !sphIsReadable ( GetIndexFileName("spd"), &m_sLastError ) )
+	if ( !sphIsReadable ( GetIndexFileName("spd").cstr(), &m_sLastError ) )
 		return NULL;
 
-	if ( m_uVersion>=3 && !sphIsReadable ( GetIndexFileName("spp"), &m_sLastError ) )
+	if ( m_uVersion>=3 && !sphIsReadable ( GetIndexFileName("spp").cstr(), &m_sLastError ) )
 		return NULL;
 
 	/////////////////////
@@ -11494,7 +11558,7 @@ const CSphSchema * CSphIndex_VLN::Prealloc ( bool bMlock, CSphString & sWarning 
 
 	if ( tCheckpointReader.GetErrorFlag() )
 	{
-		m_sLastError.SetSprintf ( "failed to read %s: %s", GetIndexFileName("spi"), tCheckpointReader.GetErrorMessage().cstr () );
+		m_sLastError.SetSprintf ( "failed to read %s: %s", GetIndexFileName("spi").cstr(), tCheckpointReader.GetErrorMessage().cstr () );
 		return NULL;
 	}
 
@@ -11915,7 +11979,7 @@ bool CSphIndex_VLN::Rename ( const char * sNewBase )
 			if ( m_iLockFD >= 0 )
 			{
 				::close ( m_iLockFD );
-				::unlink ( GetIndexFileName ( "spl" ) );
+				::unlink ( GetIndexFileName("spl").cstr() );
 				m_iLockFD = -1;
 			}
 			continue;
@@ -12343,6 +12407,43 @@ bool CSphQueryContext::CreateFilters ( CSphQuery * pQuery, const CSphSchema & tS
 }
 
 
+bool CSphQueryContext::SetupOverrides ( CSphQuery * pQuery, CSphQueryResult * pResult, const CSphSchema & tIndexSchema )
+{
+	m_pOverrides = NULL;
+	ARRAY_FOREACH ( i, pQuery->m_dOverrides )
+	{
+		const char * sAttr = pQuery->m_dOverrides[i].m_sAttr.cstr(); // shortcut
+		const CSphColumnInfo * pCol = tIndexSchema.GetAttr ( sAttr );
+		if ( !pCol )
+		{
+			pResult->m_sError.SetSprintf ( "attribute override: unknown attribute name '%s'", sAttr );
+			return false;
+		}
+
+		if ( pCol->m_eAttrType!=pQuery->m_dOverrides[i].m_uAttrType )
+		{
+			pResult->m_sError.SetSprintf ( "attribute override: attribute '%s' type mismatch (index=%d, query=%d)",
+				sAttr, pCol->m_eAttrType, pQuery->m_dOverrides[i].m_uAttrType );
+			return false;
+		}
+
+		const CSphColumnInfo * pOutCol = pResult->m_tSchema.GetAttr ( pQuery->m_dOverrides[i].m_sAttr.cstr() );
+		if ( !pOutCol )
+		{
+			pResult->m_sError.SetSprintf ( "attribute override: unknown attribute name '%s' in outgoing schema", sAttr );
+			return false;
+		}
+
+		pQuery->m_dOverrides[i].m_tInLocator = pCol->m_tLocator;
+		pQuery->m_dOverrides[i].m_tOutLocator = pOutCol->m_tLocator;
+		pQuery->m_dOverrides[i].m_dValues.Sort ();
+	}
+	if ( pQuery->m_dOverrides.GetLength() )
+		m_pOverrides = &pQuery->m_dOverrides;
+	return true;
+}
+
+
 static XQNode_t * CloneKeyword ( const XQNode_t * pNode )
 {
 	assert ( pNode );
@@ -12453,6 +12554,10 @@ bool CSphIndex_VLN::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, 
 {
 	assert ( pQuery );
 
+	// fast path for scans
+	if ( pQuery->m_eMode==SPH_MATCH_FULLSCAN || pQuery->m_sQuery.IsEmpty() )
+		return MultiScan ( pQuery, pResult, iSorters, ppSorters );
+
 	// fixup old matching modes at low level
 	CSphString sQueryFixup;
 	PrepareQueryEmulation ( pQuery, sQueryFixup );
@@ -12491,6 +12596,10 @@ bool CSphIndex_VLN::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, 
 /// many regular queries with one sorter attached to each query
 bool CSphIndex_VLN::MultiQueryEx ( int iQueries, CSphQuery * pQueries, CSphQueryResult ** ppResults, ISphMatchSorter ** ppSorters ) const
 {
+	// ensure we have multiple queries
+	if ( iQueries==1 )
+		return MultiQuery ( pQueries, ppResults[0], 1, ppSorters );
+
 	assert ( pQueries );
 	assert ( ppResults );
 	assert ( ppSorters );
@@ -12553,6 +12662,7 @@ bool CSphIndex_VLN::ParsedMultiQuery ( CSphQuery * pQuery, CSphQueryResult * pRe
 	assert ( pQuery );
 	assert ( pResult );
 	assert ( ppSorters );
+	assert ( !pQuery->m_sQuery.IsEmpty() && pQuery->m_eMode!=SPH_MATCH_FULLSCAN ); // scans must go through MultiScan()
 
 	// start counting
 	pResult->m_iQueryTime = 0;
@@ -12576,10 +12686,6 @@ bool CSphIndex_VLN::ParsedMultiQuery ( CSphQuery * pQuery, CSphQueryResult * pRe
 	CSphQueryContext tCtx;
 	if ( !tCtx.SetupCalc ( pResult, ppSorters[0]->GetSchema(), m_tSchema, GetMVAPool() ) )
 		return false;
-
-	// fixup "empty query" at low level
-	if ( pQuery->m_sQuery.IsEmpty() )
-		pQuery->m_eMode = SPH_MATCH_FULLSCAN;
 
 	// open files
 	CSphAutofile tDoclist, tHitlist, tWordlist, tDummy;
@@ -12662,37 +12768,8 @@ bool CSphIndex_VLN::ParsedMultiQuery ( CSphQuery * pQuery, CSphQueryResult * pRe
 		(ppSorters[i])->SetMVAPool ( m_pMva.GetWritePtr() );
 
 	// setup overrides
-	tCtx.m_pOverrides = NULL;
-	ARRAY_FOREACH ( i, pQuery->m_dOverrides )
-	{
-		const char * sAttr = pQuery->m_dOverrides[i].m_sAttr.cstr(); // shortcut
-		const CSphColumnInfo * pCol = m_tSchema.GetAttr ( sAttr );
-		if ( !pCol )
-		{
-			pResult->m_sError.SetSprintf ( "attribute override: unknown attribute name '%s'", sAttr );
-			return false;
-		}
-
-		if ( pCol->m_eAttrType!=pQuery->m_dOverrides[i].m_uAttrType )
-		{
-			pResult->m_sError.SetSprintf ( "attribute override: attribute '%s' type mismatch (index=%d, query=%d)",
-				sAttr, pCol->m_eAttrType, pQuery->m_dOverrides[i].m_uAttrType );
-			return false;
-		}
-
-		const CSphColumnInfo * pOutCol = pResult->m_tSchema.GetAttr ( pQuery->m_dOverrides[i].m_sAttr.cstr() );
-		if ( !pOutCol )
-		{
-			pResult->m_sError.SetSprintf ( "attribute override: unknown attribute name '%s' in outgoing schema", sAttr );
-			return false;
-		}
-
-		pQuery->m_dOverrides[i].m_tInLocator = pCol->m_tLocator;
-		pQuery->m_dOverrides[i].m_tOutLocator = pOutCol->m_tLocator;
-		pQuery->m_dOverrides[i].m_dValues.Sort ();
-	}
-	if ( pQuery->m_dOverrides.GetLength() )
-		tCtx.m_pOverrides = &pQuery->m_dOverrides;
+	if ( !tCtx.SetupOverrides ( pQuery, pResult, m_tSchema ) )
+		return false;
 
 	PROFILE_END ( query_init );
 
@@ -12711,15 +12788,6 @@ bool CSphIndex_VLN::ParsedMultiQuery ( CSphQuery * pQuery, CSphQueryResult * pRe
 		case SPH_MATCH_BOOLEAN:
 			if ( !MatchExtended ( &tCtx, pQuery, iSorters, ppSorters, pRanker.Ptr() ) )
 				return false;
-			break;
-
-		case SPH_MATCH_FULLSCAN:
-			if ( m_uDocinfo<=0 || m_tSettings.m_eDocinfo!=SPH_DOCINFO_EXTERN || m_pDocinfo.IsEmpty() || !m_tSchema.GetAttrsCount() )
-			{
-				pResult->m_sError = "fullscan requires extern docinfo";
-				return false;
-			}
-			MatchFullScan ( &tCtx, pQuery, iSorters, ppSorters, tTermSetup );
 			break;
 
 		default:

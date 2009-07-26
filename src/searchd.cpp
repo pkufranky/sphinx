@@ -172,11 +172,31 @@ static int				g_iMaxFilters		= 256;
 static int				g_iMaxFilterValues	= 4096;
 static int				g_iMaxBatchQueries	= 32;
 
-static bool				g_bPrefork			= false;
+enum Mpm_e
+{
+	MPM_NONE,		///< process queries in a loop one by one (eg. in --console)
+	MPM_FORK,		///< fork a worker process for each query
+	MPM_PREFORK,	///< keep a number of pre-forked processes
+	MPM_THREADS		///< create a worker thread for each query
+};
+
+static Mpm_e			g_eWorkers			= USE_WINDOWS ? MPM_NONE : MPM_FORK;
+
 static int				g_iPreforkChildren	= 10;		// how much workers to keep
 static CSphVector<int>	g_dPreforked;
 static volatile bool	g_bAcceptUnlocked	= true;		// whether this preforked child is guaranteed to be *not* holding a lock around accept
 static int				g_iClientFD			= -1;
+
+struct ThdDesc_t
+{
+	SphThread_t		m_tThd;
+	ProtocolType_e	m_eProto;
+	int				m_iClientSock;
+	CSphString		m_sClientName;
+};
+
+static CSphMutex				g_tThdMutex;
+static CSphVector<ThdDesc_t*>	g_dThd;			///< existing threads tables
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -194,8 +214,8 @@ static bool				g_bSeamlessRotate	= true;
 
 static bool				g_bIOStats		= false;
 static bool				g_bCpuStats		= false;
-static bool				g_bOptConsole	= false;
 static bool				g_bOptNoDetach	= false;
+static bool				g_bOptNoLock	= false;
 
 static volatile bool	g_bDoDelete			= false;	// do we need to delete any indexes?
 static volatile bool	g_bDoRotate			= false;	// flag that we are rotating now; set from SIGHUP; cleared on rotation success
@@ -229,9 +249,6 @@ struct  PipeInfo_t
 };
 
 static CSphVector<PipeInfo_t>	g_dPipes;		///< currently open read-pipes to children processes
-
-static CSphVector<DWORD>		g_dMvaStorage;		///< per-query (!) pool to store MVAs received from remote agents
-static CSphVector<BYTE>			g_dStringsStorage;	///< per-query (!) pool to store strings received from remote agents
 
 struct PoolPtrs_t
 {
@@ -2537,14 +2554,22 @@ protected:
 };
 
 
-struct SearchReplyParser_t : public IReplyParser_t
+struct SearchReplyParser_t : public IReplyParser_t, public ISphNoncopyable
 {
-						SearchReplyParser_t ( int iStart, int iEnd ) : m_iStart ( iStart ), m_iEnd ( iEnd ) {}
-	virtual bool		ParseReply ( MemInputBuffer_c & tReq, Agent_t & tAgent ) const;
+	SearchReplyParser_t ( int iStart, int iEnd, CSphVector<DWORD> & dMvaStorage, CSphVector<BYTE> & dStringsStorage )
+		: m_iStart ( iStart )
+		, m_iEnd ( iEnd ) 
+		, m_dMvaStorage ( dMvaStorage )
+		, m_dStringsStorage ( dStringsStorage )
+	{}
+	
+	virtual bool ParseReply ( MemInputBuffer_c & tReq, Agent_t & tAgent ) const;
 
 protected:
 	int					m_iStart;
 	int					m_iEnd;
+	CSphVector<DWORD> &	m_dMvaStorage;
+	CSphVector<BYTE> &	m_dStringsStorage;
 };
 
 /////////////////////////////////////////////////////////////////////////////
@@ -2771,12 +2796,12 @@ bool SearchReplyParser_t::ParseReply ( MemInputBuffer_c & tReq, Agent_t & tAgent
 					const CSphColumnInfo & tAttr = tSchema.GetAttr(j);
 					if ( tAttr.m_eAttrType & SPH_ATTR_MULTI )
 					{
-						tMatch.SetAttr ( tAttr.m_tLocator, g_dMvaStorage.GetLength() );
+						tMatch.SetAttr ( tAttr.m_tLocator, m_dMvaStorage.GetLength() );
 
 						int iValues = tReq.GetDword ();
-						g_dMvaStorage.Add ( iValues );
+						m_dMvaStorage.Add ( iValues );
 						while ( iValues-- )
-							g_dMvaStorage.Add ( tReq.GetDword() );
+							m_dMvaStorage.Add ( tReq.GetDword() );
 
 					}
 					else if ( tAttr.m_eAttrType == SPH_ATTR_FLOAT )
@@ -2793,11 +2818,11 @@ bool SearchReplyParser_t::ParseReply ( MemInputBuffer_c & tReq, Agent_t & tAgent
 						CSphString sValue = tReq.GetString();
 						int iLen = sValue.Length();
 
-						int iOff = g_dStringsStorage.GetLength(); 
+						int iOff = m_dStringsStorage.GetLength(); 
 						tMatch.SetAttr ( tAttr.m_tLocator, iOff );
 
-						g_dStringsStorage.Resize ( iOff+3+iLen );
-						BYTE * pBuf = &g_dStringsStorage[iOff];
+						m_dStringsStorage.Resize ( iOff+3+iLen );
+						BYTE * pBuf = &m_dStringsStorage[iOff];
 						pBuf += sphPackStrlen ( pBuf, iLen );
 						memcpy ( pBuf, sValue.cstr(), iLen );
 					}
@@ -3954,6 +3979,9 @@ public:
 
 protected:
 	void							RunSubset ( int iStart, int iEnd );	///< run queries against index(es) from first query in the subset
+
+	CSphVector<DWORD>				m_dMvaStorage;
+	CSphVector<BYTE>				m_dStringsStorage;
 };
 
 
@@ -3979,12 +4007,12 @@ void SearchHandler_c::RunQueries ()
 	// choose path and run queries
 	///////////////////////////////
 
-	g_dMvaStorage.Reserve ( 1024 );
-	g_dMvaStorage.Resize ( 0 );
-	g_dMvaStorage.Add ( 0 );	// dummy value
-	g_dStringsStorage.Reserve ( 1024 );
-	g_dStringsStorage.Resize ( 0 );
-	g_dStringsStorage.Add ( 0 );
+	m_dMvaStorage.Reserve ( 1024 );
+	m_dMvaStorage.Resize ( 0 );
+	m_dMvaStorage.Add ( 0 );	// dummy value
+	m_dStringsStorage.Reserve ( 1024 );
+	m_dStringsStorage.Resize ( 0 );
+	m_dStringsStorage.Add ( 0 );
 
 	// check if all queries are to the same index
 	bool bSameIndex = false;
@@ -4025,8 +4053,8 @@ void SearchHandler_c::RunQueries ()
 	// final fixup
 	ARRAY_FOREACH ( i, m_dResults )
 	{
-		m_dResults[i].m_dTag2Pools[0].m_pMva = g_dMvaStorage.GetLength() ? &g_dMvaStorage[0] : NULL;
-		m_dResults[i].m_dTag2Pools[0].m_pStrings = g_dStringsStorage.GetLength() ? &g_dStringsStorage[0] : NULL;
+		m_dResults[i].m_dTag2Pools[0].m_pMva = m_dMvaStorage.GetLength() ? &m_dMvaStorage[0] : NULL;
+		m_dResults[i].m_dTag2Pools[0].m_pStrings = m_dStringsStorage.GetLength() ? &m_dStringsStorage[0] : NULL;
 	}
 }
 
@@ -4401,7 +4429,7 @@ void SearchHandler_c::RunSubset ( int iStart, int iEnd )
 		{
 			m_dFailuresSet.SetIndex ( tFirst.m_sIndexes.cstr() );
 
-			SearchReplyParser_t tParser ( iStart, iEnd );
+			SearchReplyParser_t tParser ( iStart, iEnd, m_dMvaStorage, m_dStringsStorage );
 			int iMsecLeft = pDist->m_iAgentQueryTimeout - int(tmLocal/1000);
 			int iReplys = WaitForRemoteAgents ( pDist->m_dAgents, Max(iMsecLeft,0), tParser, &tmWait );
 
@@ -4765,6 +4793,7 @@ struct SqlStmt_t
 
 struct SqlParser_t
 {
+	void *			m_pScanner;
 	const char *	m_pBuf;
 	const char *	m_pLastTokenStart;
 	CSphString *	m_pParseError;
@@ -4808,7 +4837,8 @@ void SqlUnescape ( CSphString & sRes, const char * sEscaped, int iLen )
 //////////////////////////////////////////////////////////////////////////
 
 // unused parameter, simply to avoid type clash between all my yylex() functions
-#define YY_DECL int yylex ( YYSTYPE * lvalp, SqlParser_t * pParser )
+#define YYLEX_PARAM pParser->m_pScanner, pParser
+#define YY_DECL int yylex ( YYSTYPE * lvalp, void * yyscanner, SqlParser_t * pParser )
 #include "llsphinxql.c"
 
 void yyerror ( SqlParser_t * pParser, const char * sMessage )
@@ -4910,7 +4940,8 @@ SqlStmt_e ParseSqlQuery ( const CSphString & sQuery, SqlStmt_t * pStmt, CSphStri
 	sEnd[0] = 0; // prepare for yy_scan_buffer
 	sEnd[1] = 0; // this is ok because string allocates a small gap
 
-	YY_BUFFER_STATE tLexerBuffer = yy_scan_buffer ( (char*)sQuery.cstr(), iLen+2 );
+	yylex_init ( &tParser.m_pScanner );
+	YY_BUFFER_STATE tLexerBuffer = yy_scan_buffer ( (char*)sQuery.cstr(), iLen+2, tParser.m_pScanner );
 	if ( !tLexerBuffer )
 	{
 		sError = "internal error: yy_scan_buffer() failed";
@@ -4918,7 +4949,8 @@ SqlStmt_e ParseSqlQuery ( const CSphString & sQuery, SqlStmt_t * pStmt, CSphStri
 	}
 
 	int iRes = yyparse ( &tParser );
-	yy_delete_buffer ( tLexerBuffer );
+	yy_delete_buffer ( tLexerBuffer, tParser.m_pScanner );
+	yylex_destroy ( tParser.m_pScanner );
 
 	// set proper result-set order
 	if ( tQuery.m_sGroupBy.IsEmpty() )
@@ -5706,6 +5738,8 @@ void HandleClientSphinx ( int iSock, const char * sClientIP, int iPipeFD )
 enum MysqlColumnType_e
 {
 	MYSQL_COL_DECIMAL	= 0,
+	MYSQL_COL_LONG		= 3,
+	MYSQL_COL_LONGLONG	= 8,
 	MYSQL_COL_STRING	= 254
 };
 
@@ -5720,8 +5754,10 @@ void SendMysqlFieldPacket ( NetOutputBuffer_c & tOut, BYTE uPacketID, const char
 	int iColLen = 0;
 	switch ( eType )
 	{
-		case MYSQL_COL_DECIMAL:	iColLen = 20; break;
-		case MYSQL_COL_STRING:	iColLen = 255; break;
+		case MYSQL_COL_DECIMAL:		iColLen = 20; break;
+		case MYSQL_COL_LONG:		iColLen = 11; break;
+		case MYSQL_COL_LONGLONG:	iColLen = 20; break;
+		case MYSQL_COL_STRING:		iColLen = 255; break;
 	}
 
 	tOut.SendLSBDword ( (uPacketID<<24) + iLen );
@@ -5883,14 +5919,16 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 			tOut.SendByte ( 0 ); // extra
 
 			// field packets
-			SendMysqlFieldPacket ( tOut, uPacketID++, "id", MYSQL_COL_DECIMAL );
-			SendMysqlFieldPacket ( tOut, uPacketID++, "weight", MYSQL_COL_DECIMAL );
+			SendMysqlFieldPacket ( tOut, uPacketID++, "id", USE_64BIT ? MYSQL_COL_LONGLONG : MYSQL_COL_LONG );
+			SendMysqlFieldPacket ( tOut, uPacketID++, "weight", MYSQL_COL_LONG );
 			for ( int i=0; i<pRes->m_tSchema.GetAttrsCount(); i++ )
 			{
 				const CSphColumnInfo & tCol = pRes->m_tSchema.GetAttr(i);
-				MysqlColumnType_e eType = ( tCol.m_eAttrType==SPH_ATTR_INTEGER || tCol.m_eAttrType==SPH_ATTR_TIMESTAMP || tCol.m_eAttrType==SPH_ATTR_BOOL || tCol.m_eAttrType==SPH_ATTR_BIGINT )
-					? MYSQL_COL_DECIMAL
-					: MYSQL_COL_STRING;
+				MysqlColumnType_e eType = MYSQL_COL_STRING;
+				if ( tCol.m_eAttrType==SPH_ATTR_INTEGER || tCol.m_eAttrType==SPH_ATTR_TIMESTAMP || tCol.m_eAttrType==SPH_ATTR_BOOL )
+					eType = MYSQL_COL_LONG;
+				if ( tCol.m_eAttrType==SPH_ATTR_BIGINT )
+					eType = MYSQL_COL_LONGLONG;
 				SendMysqlFieldPacket ( tOut, uPacketID++, tCol.m_sName.cstr(), eType );
 			}
 
@@ -6921,7 +6959,7 @@ void CheckPipes ()
 
 void ConfigureIndex ( ServedIndex_t & tIdx, const CSphConfigSection & hIndex )
 {
-	tIdx.m_bMlock = ( hIndex.GetInt ( "mlock", 0 )!=0 ) && !g_bOptConsole;
+	tIdx.m_bMlock = ( hIndex.GetInt ( "mlock", 0 )!=0 ) && !g_bOptNoLock;
 	tIdx.m_bStar = ( hIndex.GetInt ( "enable_star", 0 )!=0 );
 	tIdx.m_bExpand = ( hIndex.GetInt ( "expand_keywords", 0 )!=0 );
 	tIdx.m_bPreopen = ( hIndex.GetInt ( "preopen", 0 )!=0 );
@@ -6951,7 +6989,7 @@ bool PrereadNewIndex ( ServedIndex_t & tIdx, const CSphConfigSection & hIndex, c
 	}
 
 	// try to lock it
-	if ( !g_bOptConsole && !tIdx.m_pIndex->Lock() )
+	if ( !g_bOptNoLock && !tIdx.m_pIndex->Lock() )
 	{
 		sphWarning ( "index '%s': lock: %s; NOT SERVING", szIndexName, tIdx.m_pIndex->GetLastError().cstr() );
 		return false;
@@ -7373,10 +7411,10 @@ void CheckRotate ()
 	// RAM-greedy rotate
 	/////////////////////
 
-	if ( !g_bSeamlessRotate || g_bPrefork )
+	if ( !g_bSeamlessRotate || g_eWorkers==MPM_PREFORK )
 	{
 		// wait until there's no running queries
-		if ( g_iChildren && !g_bPrefork )
+		if ( g_iChildren && g_eWorkers!=MPM_PREFORK )
 			return;
 
 		CSphConfigParser * pCP = NULL;
@@ -7420,7 +7458,7 @@ void CheckRotate ()
 		SafeDelete ( pCP );
 
 #if !USE_WINDOWS
-		if ( g_bPrefork )
+		if ( g_eWorkers==MPM_PREFORK )
 			ARRAY_FOREACH ( i, g_dPreforked )
 				kill ( g_dPreforked[i], SIGTERM );
 #endif
@@ -7879,7 +7917,7 @@ void CheckSignals ()
 		g_bGotSigchld = false;
 
 		// prefork more children, if needed
-		if ( g_bPrefork )
+		if ( g_eWorkers==MPM_PREFORK )
 			while ( g_dPreforked.GetLength() < g_iPreforkChildren )
 				if ( PreforkChild()==0 ) // child process? break from here, go work
 					return;
@@ -8150,6 +8188,51 @@ void TickPreforked ( CSphProcessSharedMutex * pAcceptMutex )
 }
 
 
+void FailClient ( int iSock, SearchdStatus_e eStatus, const char * sMessage )
+{
+	assert ( eStatus==SEARCHD_RETRY || eStatus==SEARCHD_ERROR );
+
+	int iRespLen = 4 + strlen(sMessage);
+
+	NetOutputBuffer_c tOut ( iSock );
+	tOut.SendInt ( SPHINX_SEARCHD_PROTO );
+	tOut.SendWord ( (WORD)eStatus );
+	tOut.SendWord ( 0 ); // version doesn't matter
+	tOut.SendInt ( iRespLen );
+	tOut.SendString ( sMessage );
+	tOut.Flush ();
+
+	// FIXME? without some wait, client fails to receive the response on windows
+	sphSockClose ( iSock );
+}
+
+
+void HandlerThread ( void * pArg )
+{
+	// handle that client
+	ThdDesc_t * pThd = (ThdDesc_t*) pArg;
+	HandleClient ( pThd->m_eProto, pThd->m_iClientSock, pThd->m_sClientName.cstr(), -1 );
+
+	// done; remove myself from the table
+	g_tThdMutex.Lock ();
+	ARRAY_FOREACH ( i, g_dThd )
+		if ( g_dThd[i]==pThd )
+	{
+		g_dThd.RemoveFast(i);
+		SafeDelete ( pThd );
+		break;
+	}
+	g_tThdMutex.Unlock ();
+
+	// something went wrong while removing; report
+	if ( pThd )
+	{
+		sphWarning ( "thread missing from thread table" );
+		SafeDelete ( pThd );
+	}
+}
+
+
 void TickHead ( CSphProcessSharedMutex * pAcceptMutex )
 {
 	CheckSignals ();
@@ -8177,19 +8260,8 @@ void TickHead ( CSphProcessSharedMutex * pAcceptMutex )
 	if ( ( g_iMaxChildren && g_iChildren>=g_iMaxChildren )
 		|| ( g_bDoRotate && !g_bSeamlessRotate ) )
 	{
-		const char * sMessage = "server maxed out, retry in a second";
-		int iRespLen = 4 + strlen(sMessage);
-
-		NetOutputBuffer_c tOut ( iClientSock );
-		tOut.SendInt ( SPHINX_SEARCHD_PROTO );
-		tOut.SendWord ( SEARCHD_RETRY );
-		tOut.SendWord ( 0 ); // version doesn't matter
-		tOut.SendInt ( iRespLen );
-		tOut.SendString ( sMessage );
-		tOut.Flush ();
-
+		FailClient ( iClientSock, SEARCHD_RETRY, "server maxed out, retry in a second" );
 		sphWarning ( "maxed out, dismissing client" );
-		sphSockClose ( iClientSock );
 
 		if ( g_pStats )
 			g_pStats->m_iMaxedOut++;
@@ -8197,7 +8269,7 @@ void TickHead ( CSphProcessSharedMutex * pAcceptMutex )
 	}
 
 	// handle the client
-	if ( g_bOptConsole || g_bService )
+	if ( g_eWorkers==MPM_NONE )
 	{
 		HandleClient ( pListener->m_eProto, iClientSock, sClientName, -1 );
 		sphSockClose ( iClientSock );
@@ -8205,19 +8277,46 @@ void TickHead ( CSphProcessSharedMutex * pAcceptMutex )
 	}
 
 #if !USE_WINDOWS
-	int iChildPipe = PipeAndFork ( false, -1 );
-	if ( !g_bHeadDaemon )
+	if ( g_eWorkers==MPM_FORK )
 	{
-		// child process, handle client
-		HandleClient ( pListener->m_eProto, iClientSock, sClientName, iChildPipe );
-		sphSockClose ( iClientSock );
-		exit ( 0 );
-	} else
-	{
-		// parent process, continue accept()ing
-		sphSockClose ( iClientSock );
+		int iChildPipe = PipeAndFork ( false, -1 );
+		if ( !g_bHeadDaemon )
+		{
+			// child process, handle client
+			HandleClient ( pListener->m_eProto, iClientSock, sClientName, iChildPipe );
+			sphSockClose ( iClientSock );
+			exit ( 0 );
+		} else
+		{
+			// parent process, continue accept()ing
+			sphSockClose ( iClientSock );
+		}
 	}
 #endif // !USE_WINDOWS
+
+	if ( g_eWorkers==MPM_THREADS )
+	{
+		ThdDesc_t * pThd = new ThdDesc_t ();
+		pThd->m_eProto = pListener->m_eProto;
+		pThd->m_iClientSock = iClientSock;
+		pThd->m_sClientName = sClientName;
+
+		g_tThdMutex.Lock ();
+		g_dThd.Add ( pThd );
+		if ( !sphThreadCreate ( &pThd->m_tThd, HandlerThread, pThd ) )
+		{
+			g_dThd.Pop();
+			SafeDelete ( pThd );
+
+			FailClient ( iClientSock, SEARCHD_RETRY, "failed to create worker thread" );
+			sphWarning ( "failed to create worker thread" );
+		}
+		g_tThdMutex.Unlock ();
+		return;
+	}
+
+	// default (should not happen)
+	sphSockClose ( iClientSock );
 }
 
 
@@ -8284,7 +8383,7 @@ int WINAPI ServiceMain ( int argc, char **argv )
 		// handle no-arg options
 		OPT ( "-h", "--help" )		{ ShowHelp(); return 0; }
 		OPT ( "-?", "--?" )			{ ShowHelp(); return 0; }
-		OPT1 ( "--console" )		{ g_bOptConsole = true; g_bOptNoDetach = true; }
+		OPT1 ( "--console" )		{ g_eWorkers = MPM_NONE; g_bOptNoLock = true; g_bOptNoDetach = true; }
 		OPT1 ( "--stop" )			bOptStop = true;
 		OPT1 ( "--status" )			bOptStatus = true;
 		OPT1 ( "--pidfile" )		bOptPIDFile = true;
@@ -8320,7 +8419,8 @@ int WINAPI ServiceMain ( int argc, char **argv )
 	if ( !g_bService )
 	{
 		sphWarning ( "forcing --console mode on Windows" );
-		g_bOptConsole = g_bOptNoDetach = true;
+		g_eWorkers = MPM_NONE;
+		g_bOptNoLock = g_bOptNoDetach = true;
 	}
 
 	// init WSA on Windows
@@ -8332,10 +8432,10 @@ int WINAPI ServiceMain ( int argc, char **argv )
 #endif
 
 	if ( !bOptPIDFile )
-		bOptPIDFile = !g_bOptConsole;
+		bOptPIDFile = !g_bOptNoLock;
 
 	// check port and listen arguments early
-	if ( !g_bOptConsole && ( bOptPort || bOptListen ) )
+	if ( !g_bOptNoDetach && ( bOptPort || bOptListen ) )
 	{
 		sphWarning ( "--listen and --port are only allowed in --console debug mode; switch ignored" );
 		bOptPort = bOptListen = false;
@@ -8552,16 +8652,28 @@ int WINAPI ServiceMain ( int argc, char **argv )
 
 	if ( hSearchd("workers") )
 	{
-		if ( hSearchd["workers"]=="fork" )
+		if ( hSearchd["workers"]=="none" )
 		{
-			g_bPrefork = false;
+			g_eWorkers = MPM_NONE;
+		} else if ( hSearchd["workers"]=="fork" )
+		{
+#if USE_WINDOWS
+			sphDie ( "workers=fork is not supported on Windows" );
+#endif
+			g_eWorkers = MPM_FORK;
 		} else if ( hSearchd["workers"]=="prefork" )
 		{
-			g_bPrefork = true;
+#if USE_WINDOWS
+			sphDie ( "workers=prefork is not supported on Windows" );
+#endif
+			g_eWorkers = MPM_PREFORK;
 			g_iPreforkChildren = hSearchd.GetInt ( "prefork", g_iPreforkChildren );
+		} else if ( hSearchd["workers"]=="threads" )
+		{
+			g_eWorkers = MPM_THREADS;
 		} else
 		{
-			sphFatal ( "unknown workers=%s value (must be fork or prefork)", hSearchd["workers"].cstr() );
+			sphFatal ( "unknown workers=%s value", hSearchd["workers"].cstr() );
 		}
 	}
 
@@ -8684,7 +8796,7 @@ int WINAPI ServiceMain ( int argc, char **argv )
 		const CSphConfigSection & hIndex = hConf["index"].IterateGet();
 		const char * sIndexName = hConf["index"].IterateGetKey().cstr();
 
-		if ( g_bOptConsole && sOptIndex && strcasecmp ( sIndexName, sOptIndex )!=0 )
+		if ( g_bOptNoDetach && sOptIndex && strcasecmp ( sIndexName, sOptIndex )!=0 )
 			continue;
 
 		AddIndex ( sIndexName, hIndex );
@@ -8753,7 +8865,7 @@ int WINAPI ServiceMain ( int argc, char **argv )
 	sphArenaInit ( hSearchd.GetSize ( "mva_updates_pool", 1048576 ) );
 
 	// create logs
-	if ( !g_bOptConsole )
+	if ( !g_bOptNoLock )
 	{
 		// create log
 		const char * sLog = "searchd.log";
@@ -8895,7 +9007,7 @@ int WINAPI ServiceMain ( int argc, char **argv )
 	}
 
 	// if we're running in console mode, dump queries to tty as well
-	if ( g_bOptConsole )
+	if ( g_bOptNoLock && hSearchd ( "query_log" ) )
 		g_iQueryLogFile = g_iLogFile;
 
 	/////////////////
@@ -8915,7 +9027,7 @@ int WINAPI ServiceMain ( int argc, char **argv )
 
 	CSphProcessSharedMutex * pAcceptMutex = NULL;
 #if !USE_WINDOWS
-	if ( g_bPrefork )
+	if ( g_eWorkers==MPM_PREFORK )
 	{
 		pAcceptMutex = new CSphProcessSharedMutex();
 		if ( !pAcceptMutex )
@@ -8926,6 +9038,10 @@ int WINAPI ServiceMain ( int argc, char **argv )
 				break;
 	}
 #endif
+
+	if ( g_eWorkers==MPM_THREADS )
+		if ( !g_tThdMutex.Init () )
+			sphDie ( "failed to init thdmutex" );
 
 	for ( ;; )
 	{

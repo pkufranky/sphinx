@@ -17,7 +17,7 @@ public:
 
 	void			SetBufferSize ( int iBufferSize );	///< tune write cache size; must be called before OpenFile() or SetFile()
 
-	bool			OpenFile ( const char * sName, CSphString & sErrorBuffer );
+	bool			OpenFile ( const CSphString & sName, CSphString & sErrorBuffer );
 	void			SetFile ( int iFD, SphOffset_t * pSharedOffset );
 	void			CloseFile ( bool bTruncate = false );	///< note: calls Flush(), ie. IsError() might get true after this call
 
@@ -96,6 +96,7 @@ public:
 	void						BindWeights ( const CSphQuery * pQuery, const CSphSchema & tSchema );
 	bool						SetupCalc ( CSphQueryResult * pResult, const CSphSchema & tInSchema, const CSphSchema & tSchema, const DWORD * pMvaPool );
 	bool						CreateFilters ( CSphQuery * pQuery, const CSphSchema & tSchema, const DWORD * pMvaPool, CSphString & sError );
+	bool						SetupOverrides ( CSphQuery * pQuery, CSphQueryResult * pResult, const CSphSchema & tIndexSchema );
 
 	void						EarlyCalc ( CSphMatch & tMatch ) const;
 	void						LateCalc ( CSphMatch & tMatch ) const;
