@@ -537,6 +537,12 @@ public:
 			m_pData [ m_iLength++ ] = tValue;
 	}
 
+	/// get first entry ptr
+	T * Begin ()
+	{
+		return m_iLength ? m_pData : NULL;
+	}
+
 	/// get last entry
 	T & Last ()
 	{

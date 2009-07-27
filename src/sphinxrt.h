@@ -15,7 +15,7 @@ public:
 
 	/// insert/update document in current txn
 	/// fails in case of two open txns to different indexes
-	virtual bool AddDocument ( const CSphVector<CSphString> & dFields, const CSphMatch & tDoc ) = 0;
+	virtual bool AddDocument ( int iFields, const char ** ppFields, const CSphMatch & tDoc, bool bReplace ) = 0;
 
 	/// insert/update document in current txn
 	/// fails in case of two open txns to different indexes

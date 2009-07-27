@@ -36,6 +36,7 @@
 %token	TOK_MIN
 %token	TOK_OPTION
 %token	TOK_ORDER
+%token	TOK_REPLACE
 %token	TOK_SELECT
 %token	TOK_SHOW
 %token	TOK_STATUS
@@ -45,6 +46,8 @@
 %token	TOK_WEIGHT
 %token	TOK_WITHIN
 %token	TOK_WHERE
+
+%type	<m_tInsval>		insert_val
 
 %left TOK_AND TOK_OR
 %nonassoc TOK_NOT
@@ -394,10 +397,15 @@ show_meta:
 
 //////////////////////////////////////////////////////////////////////////
 
+insert_or_replace_tok:
+	TOK_INSERT					{ $$ = $1; $$.m_eStmt = STMT_INSERT; }
+	| TOK_REPLACE				{ $$ = $1; $$.m_eStmt = STMT_REPLACE; }
+	;
+
 insert_into:
-	TOK_INSERT TOK_INTO TOK_IDENT opt_insert_cols_list TOK_VALUES '(' TOK_CONST_INT ',' insert_vals_list ')'
+	insert_or_replace_tok TOK_INTO TOK_IDENT opt_insert_cols_list TOK_VALUES '(' TOK_CONST_INT ',' insert_vals_list ')'
 		{
-			pParser->m_pStmt->m_eStmt = STMT_INSERT_INTO;
+			pParser->m_pStmt->m_eStmt = $$.m_eStmt;
 			pParser->m_pStmt->m_sInsertIndex = $3.m_sValue;
 			pParser->m_pStmt->m_tInsertDocinfo.m_iDocID = $7.m_iValue;
 		}
@@ -409,12 +417,14 @@ opt_insert_cols_list:
 	;
 
 insert_vals_list:
-	insert_val							{ pParser->m_pStmt->m_dInsertValues.Add ( $1.m_sValue ); }
-	| insert_vals_list ',' insert_val	{ pParser->m_pStmt->m_dInsertValues.Add ( $3.m_sValue ); }
+	insert_val							{ pParser->m_pStmt->m_dInsertValues.Add ( $1 ); }
+	| insert_vals_list ',' insert_val	{ pParser->m_pStmt->m_dInsertValues.Add ( $3 ); }
 	;
 
 insert_val:
-	TOK_QUOTED_STRING
+	TOK_CONST_INT		{ $$.m_iType = TOK_CONST_INT; $$.m_iVal = $1.m_iValue; }
+	| TOK_CONST_FLOAT	{ $$.m_iType = TOK_CONST_FLOAT; $$.m_fVal = $1.m_fValue; }
+	| TOK_QUOTED_STRING	{ $$.m_iType = TOK_QUOTED_STRING; $$.m_sVal = $1.m_sValue; }
 	;
 
 //////////////////////////////////////////////////////////////////////////
@@ -422,7 +432,7 @@ insert_val:
 delete_from:
 	TOK_DELETE TOK_FROM TOK_IDENT TOK_WHERE TOK_ID '=' TOK_CONST_INT
 		{
-			pParser->m_pStmt->m_eStmt = STMT_DELETE_FROM;
+			pParser->m_pStmt->m_eStmt = STMT_DELETE;
 			pParser->m_pStmt->m_sDeleteIndex = $3.m_sValue;
 			pParser->m_pStmt->m_iDeleteID = $7.m_iValue;
 		}

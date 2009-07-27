@@ -567,7 +567,7 @@ public:
 	explicit					RtIndex_t ( const CSphSchema & tSchema );
 	virtual						~RtIndex_t ();
 
-	bool						AddDocument ( const CSphVector<CSphString> & dFields, const CSphMatch & tDoc );
+	bool						AddDocument ( int iFields, const char ** ppFields, const CSphMatch & tDoc, bool bReplace );
 	bool						AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphMatch & tDoc );
 	bool						DeleteDocument ( SphDocID_t uDoc );
 	void						Commit ();
@@ -664,7 +664,7 @@ RtIndex_t::~RtIndex_t ()
 class CSphSource_StringVector : public CSphSource_Document
 {
 public:
-	explicit			CSphSource_StringVector ( const CSphVector<CSphString> & dFields, const CSphSchema & tSchema );
+	explicit			CSphSource_StringVector ( int iFields, const char ** ppFields, const CSphSchema & tSchema );
 	virtual				~CSphSource_StringVector () {}
 
 	virtual bool		Connect ( CSphString & ) { return true; }
@@ -689,24 +689,39 @@ protected:
 };
 
 
-CSphSource_StringVector::CSphSource_StringVector ( const CSphVector<CSphString> & dFields, const CSphSchema & tSchema )
+CSphSource_StringVector::CSphSource_StringVector ( int iFields, const char ** ppFields, const CSphSchema & tSchema )
 	: CSphSource_Document ( "$stringvector" )
 {
 	m_tSchema = tSchema;
 
-	m_dFields.Resize ( 1+dFields.GetLength() );
-	ARRAY_FOREACH ( i, dFields )
-		m_dFields[i] = (BYTE*) dFields[i].cstr();
-	m_dFields [ dFields.GetLength() ] = NULL;
+	m_dFields.Resize ( 1+iFields );
+	for ( int i=0; i<iFields; i++ )
+	{
+		m_dFields[i] = (BYTE*) ppFields[i];
+		assert ( m_dFields[i] );
+	}
+	m_dFields [ iFields ] = NULL;
 }
 
 
-bool RtIndex_t::AddDocument ( const CSphVector<CSphString> & dFields, const CSphMatch & tDoc )
+bool RtIndex_t::AddDocument ( int iFields, const char ** ppFields, const CSphMatch & tDoc, bool bReplace )
 {
 	if ( !tDoc.m_iDocID )
 		return true;
 
-	CSphSource_StringVector tSrc ( dFields, m_tSchema );
+	if ( !bReplace )
+	{
+		m_tRwlock.ReadLock ();
+		ARRAY_FOREACH ( i, m_pSegments )
+			if ( FindDocinfo ( m_pSegments[i], tDoc.m_iDocID ) )
+		{
+			m_tRwlock.Unlock ();
+			return false; // already exists; INSERT fails
+		}
+		m_tRwlock.Unlock ();
+	}
+
+	CSphSource_StringVector tSrc ( iFields, ppFields, m_tSchema );
 	tSrc.SetTokenizer ( m_pTokenizer );
 	tSrc.SetDict ( m_pDict );
 
