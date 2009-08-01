@@ -119,6 +119,13 @@ struct RtWord_t
 };
 
 
+struct RtWordCheckpoint_t
+{
+	SphWordID_t					m_uWordID;
+	int							m_iOffset;
+};
+
+
 struct RtSegment_t
 {
 protected:
@@ -131,6 +138,7 @@ public:
 
 #if COMPRESSED_WORDLIST
 	CSphVector<BYTE>			m_dWords;
+	CSphVector<RtWordCheckpoint_t> m_dWordCheckpoints;
 #else
 	CSphVector<RtWord_t>		m_dWords;
 #endif
@@ -326,21 +334,41 @@ struct RtDocReader_t
 
 #if COMPRESSED_WORDLIST
 
+static const int WORDLIST_CHECKPOINT_SIZE = 1024;
+
 struct RtWordWriter_t
 {
-	CSphVector<BYTE> *	m_pWords;
-	SphWordID_t			m_uLastWordID;
-	SphDocID_t			m_uLastDoc;
+	CSphVector<BYTE> *					m_pWords;
+	CSphVector<RtWordCheckpoint_t> *	m_pCheckpoints;
+	SphWordID_t							m_uLastWordID;
+	SphDocID_t							m_uLastDoc;
+	int									m_iWords;
 
 	explicit RtWordWriter_t ( RtSegment_t * pSeg )
 		: m_pWords ( &pSeg->m_dWords )
+		, m_pCheckpoints ( &pSeg->m_dWordCheckpoints )
 		, m_uLastWordID ( 0 )
 		, m_uLastDoc ( 0 )
-	{}
+		, m_iWords ( 0 )
+	{
+		assert ( !m_pWords->GetLength() );
+		assert ( !m_pCheckpoints->GetLength() );
+	}
 
 	void ZipWord ( const RtWord_t & tWord )
 	{
 		CSphVector<BYTE> & tWords = *m_pWords;
+		if ( ++m_iWords==WORDLIST_CHECKPOINT_SIZE )
+		{
+			RtWordCheckpoint_t & tCheckpoint = m_pCheckpoints->Add();
+			tCheckpoint.m_uWordID = tWord.m_uWordID;
+			tCheckpoint.m_iOffset = tWords.GetLength();
+
+			m_uLastWordID = 0;
+			m_uLastDoc = 0;
+			m_iWords = 1;
+		}
+
 		ZipWordid ( tWords, tWord.m_uWordID - m_uLastWordID );
 		ZipDword ( tWords, tWord.m_uDocs );
 		ZipDword ( tWords, tWord.m_uHits );
@@ -355,9 +383,11 @@ struct RtWordReader_t
 {
 	const BYTE *	m_pCur;
 	const BYTE *	m_pMax;
-	RtWord_t		m_tWord;	
+	RtWord_t		m_tWord;
+	int				m_iWords;
 
 	explicit RtWordReader_t ( const RtSegment_t * pSeg )
+		: m_iWords ( 0 )
 	{
 		m_pCur = &pSeg->m_dWords[0];
 		m_pMax = m_pCur + pSeg->m_dWords.GetLength();
@@ -368,6 +398,12 @@ struct RtWordReader_t
 
 	const RtWord_t * UnzipWord ()
 	{
+		if ( ++m_iWords==WORDLIST_CHECKPOINT_SIZE )
+		{
+			m_tWord.m_uWordID = 0;
+			m_tWord.m_uDoc = 0;
+			m_iWords = 1;
+		}
 		if ( m_pCur>=m_pMax )
 			return NULL;
 
@@ -386,7 +422,7 @@ struct RtWordReader_t
 	}
 };
 
-#else
+#else // !COMPRESSED_WORDLIST
 
 struct RtWordWriter_t
 {
@@ -1596,6 +1632,9 @@ struct RtQwordSetup_t : ISphQwordSetup
 
 	virtual ISphQword *	QwordSpawn ( const XQKeyword_t & ) const;
 	virtual bool		QwordSetup ( ISphQword * pQword ) const;
+
+private:
+	void				QwordPrepare ( RtQword_t * pMyWord, const RtWord_t * pFound ) const;
 };
 
 
@@ -1611,31 +1650,85 @@ bool RtQwordSetup_t::QwordSetup ( ISphQword * pQword ) const
 	if ( !pMyWord )
 		return false;
 
+	const SphWordID_t uID = pMyWord->m_iWordID;
 	RtWordReader_t tReader ( m_pSeg );
-	for ( ;; )
+
+#if COMPRESSED_WORDLIST
+
+	// position reader to the right checkpoint
+	const CSphVector<RtWordCheckpoint_t> & dCheckpoints = m_pSeg->m_dWordCheckpoints;
+	if ( dCheckpoints.GetLength() )
 	{
-		const RtWord_t * pWord = tReader.UnzipWord();
-		if ( !pWord )
-			break;
-
-		if ( pWord->m_uWordID==pMyWord->m_iWordID )
+		if ( dCheckpoints[0].m_uWordID > uID )
 		{
-			pMyWord->m_iDocs = pWord->m_uDocs;
-			pMyWord->m_iHits = pWord->m_uHits;
-
-			SafeDelete ( pMyWord->m_pDocReader );
-			pMyWord->m_pDocReader = new RtDocReader_t ( m_pSeg, *pWord );
-
-			pMyWord->m_tHitReader.m_pBase = NULL;
-			if ( m_pSeg->m_dHits.GetLength() )
-				pMyWord->m_tHitReader.m_pBase = &m_pSeg->m_dHits[0];
-
-			pMyWord->m_pSeg = m_pSeg;
-			return true;
+ 			tReader.m_pMax = tReader.m_pCur + dCheckpoints[0].m_iOffset;
+		}
+		else if ( dCheckpoints.Last().m_uWordID <= uID )
+		{
+			tReader.m_pCur += dCheckpoints.Last().m_iOffset;
+		}
+		else
+		{
+			int L = 0;
+			int R = dCheckpoints.GetLength()-1;
+			while ( L+1<R )
+			{
+				int M = L + (R-L)/2;
+				if ( uID < dCheckpoints[M].m_uWordID )
+					R = M;
+				else if ( uID > dCheckpoints[M].m_uWordID )
+					L = M;
+				else
+				{
+					L = M;
+					break;
+				}
+			}
+			assert ( dCheckpoints[L].m_uWordID <= uID );
+ 			if ( L < dCheckpoints.GetLength()-1 )
+			{
+				assert ( dCheckpoints[L+1].m_uWordID > uID );
+ 				tReader.m_pMax = tReader.m_pCur + dCheckpoints[L+1].m_iOffset;
+			}
+			tReader.m_pCur += dCheckpoints[L].m_iOffset;
 		}
 	}
 
+	// find the word between checkpoints
+	while ( const RtWord_t * pWord = tReader.UnzipWord() )
+	{
+		if ( pWord->m_uWordID==uID )
+		{
+			QwordPrepare ( pMyWord, pWord );
+			return true;
+		}
+		else if ( pWord->m_uWordID > uID )
+			return false;
+	}
 	return false;
+
+#else // !COMPRESSED_WORDLIST
+	const RtWord_t * pWord = m_pSeg->m_dWords.BinarySearch ( bind ( &RtWord_t::m_uWordID ), uID );
+	if ( pWord )
+		QwordPrepare ( pMyWord, pWord );
+	return pWord!=NULL;
+#endif
+}
+
+
+void RtQwordSetup_t::QwordPrepare ( RtQword_t * pMyWord, const RtWord_t * pFound ) const
+{
+	pMyWord->m_iDocs = pFound->m_uDocs;
+	pMyWord->m_iHits = pFound->m_uHits;
+
+	SafeDelete ( pMyWord->m_pDocReader );
+	pMyWord->m_pDocReader = new RtDocReader_t ( m_pSeg, *pFound );
+
+	pMyWord->m_tHitReader.m_pBase = NULL;
+	if ( m_pSeg->m_dHits.GetLength() )
+		pMyWord->m_tHitReader.m_pBase = &m_pSeg->m_dHits[0];
+
+	pMyWord->m_pSeg = m_pSeg;
 }
 
 
