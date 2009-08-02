@@ -202,11 +202,14 @@ void main ()
 	DoSearch ( pIndex );
 
 	// dump
+	int64_t tmDump = sphMicroTimer();
+
 	printf ( "pre-dump allocs=%d, bytes=%d\n", sphAllocsCount(), sphAllocBytes() );
 	pIndex->DumpToDisk ( "dump" );
 	printf ( "post-dump allocs=%d, bytes=%d\n", sphAllocsCount(), sphAllocBytes() );
 
 	int64_t tmEnd = sphMicroTimer();
+	printf ( "dump done in %d.%03d sec\n", int((tmEnd-tmDump)/1000000), int(((tmEnd-tmDump)%1000000)/1000) );
 	printf ( "total with dump %d.%03d sec, %.2f MB/sec\n",
 		int((tmEnd-tmStart)/1000000), int(((tmEnd-tmStart)%1000000)/1000),
 		g_fTotalMB*1000000.0f/(tmEnd-tmStart) );

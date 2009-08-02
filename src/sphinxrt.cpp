@@ -1414,15 +1414,6 @@ bool RtIndex_t::DeleteDocument ( SphDocID_t uDoc )
 }
 
 
-/// WARNING! static buffer, non-reenterable
-static const char * FormatMicrotime ( int64_t uTime )
-{
-	static char sBuf[32];
-	snprintf ( sBuf, sizeof(sBuf), "%d.%03d", int(uTime/1000000), int((uTime%1000000)/1000) );
-	return sBuf;
-}
-
-
 struct Checkpoint_t
 {
 	uint64_t m_uWord;
@@ -1448,73 +1439,103 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 	wrDocs.PutBytes ( &bDummy, 1 );
 	wrHits.PutBytes ( &bDummy, 1 );
 
-	int64_t tmStart = sphMicroTimer();
+	// we don't have enough RAM to create new merged segments
+	// and have to do N-way merge kinda in-place
+	CSphVector<RtWordReader_t*> pWordReaders;
+	CSphVector<RtDocReader_t*> pDocReaders;
+	CSphVector<RtSegment_t*> pSegments;
+	CSphVector<const RtWord_t*> pWords;
+	CSphVector<const RtDoc_t*> pDocs;
 
-	while ( m_pSegments.GetLength()>1 )
-	{
-		m_pSegments.Sort ( CmpSegments_fn() );
-		RtSegment_t * pSeg1 = m_pSegments.Pop();
-		RtSegment_t * pSeg2 = m_pSegments.Pop();
-		m_pSegments.Add ( MergeSegments ( pSeg1, pSeg2 ) );
-		SafeDelete ( pSeg1 );
-		SafeDelete ( pSeg2 );
-	}
-	RtSegment_t * pSeg = m_pSegments[0];
+	pWordReaders.Reserve ( m_pSegments.GetLength() );
+	pDocReaders.Reserve ( m_pSegments.GetLength() );
+	pSegments.Reserve ( m_pSegments.GetLength() );
+	pWords.Reserve ( m_pSegments.GetLength() );
+	pDocs.Reserve ( m_pSegments.GetLength() );
 
-	int64_t tmMerged = sphMicroTimer() ;
-	printf ( "final merge done in %s sec\n", FormatMicrotime ( tmMerged-tmStart ) );
+	// OPTIMIZE? somehow avoid new on iterators maybe?
+	ARRAY_FOREACH ( i, m_pSegments )
+		pWordReaders.Add ( new RtWordReader_t ( m_pSegments[i] ) );
+
+	ARRAY_FOREACH ( i, pWordReaders )
+		pWords.Add ( pWordReaders[i]->UnzipWord() );
+
+	// loop keywords
+	static const int WORDLIST_CHECKPOINT = 1024;
+	CSphVector<Checkpoint_t> dCheckpoints;
+	int iWords = 0;
 
 	SphWordID_t uLastWord = 0;
 	SphOffset_t uLastDocpos = 0;
 
-	static const int WORDLIST_CHECKPOINT = 1024;
-	int iWords = 0;
-
-	CSphVector<Checkpoint_t> dCheckpoints;
-	RtWordReader_t tInWord ( pSeg );
 	for ( ;; )
 	{
-		const RtWord_t * pWord = tInWord.UnzipWord();
+		// find keyword with min id
+		const RtWord_t * pWord = NULL;
+		ARRAY_FOREACH ( i, pWords ) // OPTIMIZE? PQ or at least nulls removal here?!
+			if ( pWords[i] )
+				if ( !pWord || pWords[i]->m_uWordID < pWord->m_uWordID )
+					pWord = pWords[i];
 		if ( !pWord )
 			break;
 
-		SphDocID_t uLastDoc = 0;
-		SphOffset_t uLastHitpos = 0;
+		// loop all segments that have this keyword
+		assert ( pSegments.GetLength()==0 );
+		assert ( pDocReaders.GetLength()==0 );
+		assert ( pDocs.GetLength()==0 );
 
-		if ( !iWords )
+		ARRAY_FOREACH ( i, pWords )
+			if ( pWords[i] && pWords[i]->m_uWordID==pWord->m_uWordID )
 		{
-			Checkpoint_t & tChk = dCheckpoints.Add ();
-			tChk.m_uWord = pWord->m_uWordID;
-			tChk.m_uOffset = wrDict.GetPos();
+			pSegments.Add ( m_pSegments[i] );
+			pDocReaders.Add ( new RtDocReader_t ( m_pSegments[i], *pWords[i] ) );
+
+			const RtDoc_t * pDoc = pDocReaders.Last()->UnzipDoc();
+			while ( pDoc && m_pSegments[i]->m_dKlist.BinarySearch ( pDoc->m_uDocID ) )
+				pDoc = pDocReaders.Last()->UnzipDoc();
+
+			pDocs.Add ( pDoc );
 		}
 
-		wrDict.ZipOffset ( pWord->m_uWordID - uLastWord );
-		wrDict.ZipOffset ( wrDocs.GetPos() - uLastDocpos );
-		wrDict.ZipInt ( pWord->m_uDocs );
-		wrDict.ZipInt ( pWord->m_uHits );
-
-		uLastDocpos = wrDocs.GetPos();
-		uLastWord = pWord->m_uWordID;
-
-		RtDocReader_t tInDoc ( pSeg, *pWord );
+		// loop documents
+		SphOffset_t uDocpos = wrDocs.GetPos();
+		SphDocID_t uLastDoc = 0;
+		SphOffset_t uLastHitpos = 0;
+		int iDocs = 0;
+		int iHits = 0;
 		for ( ;; )
 		{
-			const RtDoc_t * pDoc = tInDoc.UnzipDoc();
-			if ( !pDoc )
+			// find alive doc with min id
+			int iMinReader = -1;
+			ARRAY_FOREACH ( i, pDocs ) // OPTIMIZE?
+			{
+				if ( !pDocs[i] )
+					continue;
+
+				assert ( !pSegments[i]->m_dKlist.BinarySearch ( pDocs[i]->m_uDocID ) );
+				if ( iMinReader<0 || pDocs[i]->m_uDocID < pDocs[iMinReader]->m_uDocID )
+					iMinReader = i;
+			}
+			if ( iMinReader<0 )
 				break;
 
-			wrDocs.ZipOffset ( pDoc->m_uDocID-uLastDoc );
+			// write doclist entry
+			const RtDoc_t * pDoc = pDocs[iMinReader]; // shortcut
+			iDocs++;
+			iHits += pDoc->m_uHits;
+
+			wrDocs.ZipOffset ( pDoc->m_uDocID - uLastDoc );
 			wrDocs.ZipOffset ( wrHits.GetPos() - uLastHitpos );
 			wrDocs.ZipInt ( pDoc->m_uFields );
 			wrDocs.ZipInt ( pDoc->m_uHits );
 			uLastDoc = pDoc->m_uDocID;
 			uLastHitpos = wrHits.GetPos();
 
+			// loop hits from most current segment
 			if ( pDoc->m_uHits>1 )
 			{
 				DWORD uLastHit = 0;
-
-				RtHitReader_t tInHit ( pSeg, pDoc );
+				RtHitReader_t tInHit ( pSegments[iMinReader], pDoc );
 				for ( DWORD uValue=tInHit.UnzipHit(); uValue; uValue=tInHit.UnzipHit() )
 				{
 					wrHits.ZipInt ( uValue - uLastHit );
@@ -1525,35 +1546,113 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 				wrHits.ZipInt ( pDoc->m_uHit );
 			}
 			wrHits.ZipInt ( 0 );
-		}
-		wrDocs.ZipInt ( 0 );
 
-		if ( ++iWords==WORDLIST_CHECKPOINT )
+			// fast forward readers
+			SphDocID_t uMinID = pDocs[iMinReader]->m_uDocID;
+			ARRAY_FOREACH ( i, pDocs )
+				while ( pDocs[i] && ( pDocs[i]->m_uDocID<=uMinID || pSegments[i]->m_dKlist.BinarySearch ( pDocs[i]->m_uDocID ) ) )
+					pDocs[i] = pDocReaders[i]->UnzipDoc();
+		}
+
+		// write dict entry if necessary
+		if ( wrDocs.GetPos()!=uDocpos )
 		{
-			wrDict.ZipInt ( 0 );
-			wrDict.ZipOffset ( wrDocs.GetPos() - uLastDocpos ); // store last hitlist length
+			wrDocs.ZipInt ( 0 );
 
-			uLastDocpos = 0;
-			uLastWord = 0;
+			if ( !iWords )
+			{
+				Checkpoint_t & tChk = dCheckpoints.Add ();
+				tChk.m_uWord = pWord->m_uWordID;
+				tChk.m_uOffset = wrDict.GetPos();
+			}
 
-			iWords = 0;
+			wrDict.ZipOffset ( pWord->m_uWordID - uLastWord );
+			wrDict.ZipOffset ( uDocpos - uLastDocpos );
+			wrDict.ZipInt ( iDocs );
+			wrDict.ZipInt ( iHits );
+			uLastWord = pWord->m_uWordID;
+			uLastDocpos = uDocpos;
+
+			if ( ++iWords==WORDLIST_CHECKPOINT )
+			{
+				wrDict.ZipInt ( 0 );
+				wrDict.ZipOffset ( wrDocs.GetPos() - uLastDocpos ); // store last hitlist length
+				uLastDocpos = 0;
+				uLastWord = 0;
+				iWords = 0;
+			}
 		}
+
+		// move words forward
+		ARRAY_FOREACH ( i, pWords )
+			if ( pWords[i] && pWords[i]->m_uWordID==pWord->m_uWordID )
+				pWords[i] = pWordReaders[i]->UnzipWord();
+
+		// cleanup
+		ARRAY_FOREACH ( i, pDocReaders )
+			SafeDelete ( pDocReaders[i] );
+		pSegments.Resize ( 0 );
+		pDocReaders.Resize ( 0 );
+		pDocs.Resize ( 0 );			
 	}
+
+	// write checkpoints
 	wrDict.ZipInt ( 0 ); // indicate checkpoint
 	wrDict.ZipOffset ( wrDocs.GetPos() - uLastDocpos ); // store last doclist length
 
 	if ( dCheckpoints.GetLength() )
 		wrDict.PutBytes ( &dCheckpoints[0], dCheckpoints.GetLength()*sizeof(Checkpoint_t) );
 
-	wrRows.PutBytes ( &pSeg->m_dRows[0], pSeg->m_dRows.GetLength()*sizeof(CSphRowitem) );
+	// write attributes
+	CSphVector<RtRowIterator_t*> pRowIterators ( m_pSegments.GetLength() );
+	ARRAY_FOREACH ( i, m_pSegments )
+		pRowIterators[i] = new RtRowIterator_t ( m_pSegments[i], m_iStride, false );
 
+	CSphVector<const CSphRowitem*> pRows ( m_pSegments.GetLength() );
+	ARRAY_FOREACH ( i, pRowIterators )
+		pRows[i] = pRowIterators[i]->GetNextAliveRow();
+
+	for ( ;; )
+	{
+		// find min row
+		int iMinRow = -1;
+		ARRAY_FOREACH ( i, pRows )
+			if ( pRows[i] )
+				if ( iMinRow<0 || DOCINFO2ID(pRows[i]) < DOCINFO2ID(pRows[iMinRow]) )
+					iMinRow = i;
+		if ( iMinRow<0 )
+			break;
+
+#ifndef NDEBUG
+		// verify that it's unique
+		int iDupes = 0;
+		ARRAY_FOREACH ( i, pRows )
+			if ( pRows[i] )
+				if ( DOCINFO2ID(pRows[i])==DOCINFO2ID(pRows[iMinRow]) )
+					iDupes++;
+		assert ( iDupes==1 );
+#endif
+
+		// emit it
+		wrRows.PutBytes ( pRows[iMinRow], m_iStride*sizeof(CSphRowitem) );
+
+		// fast forward
+		pRows[iMinRow] = pRowIterators[iMinRow]->GetNextAliveRow();
+	}
+
+	// cleanup
+	ARRAY_FOREACH ( i, pWordReaders )
+		SafeDelete ( pWordReaders[i] );
+	ARRAY_FOREACH ( i, pDocReaders )
+		SafeDelete ( pDocReaders[i] );
+	ARRAY_FOREACH ( i, pRowIterators )
+		SafeDelete ( pRowIterators[i] );
+
+	// done
 	wrHits.CloseFile ();
 	wrDocs.CloseFile ();
 	wrDict.CloseFile ();
 	wrRows.CloseFile ();
-
-	int64_t tmDump = sphMicroTimer ();
-	printf ( "dump done in %s sec\n", FormatMicrotime ( tmDump-tmMerged ) );
 
 	Verify ( m_tRwlock.Unlock() );
 	Verify ( m_tWriterMutex.Lock() );
