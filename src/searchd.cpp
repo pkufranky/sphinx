@@ -1052,7 +1052,7 @@ void sphFDSet ( int fd, fd_set * fdset )
 
 #else // !USE_WINDOWS
 
-#define SPH_FDSET_OVERFLOW(_fd) ((_fd) < 0 || (_fd) >= FD_SETSIZE)
+#define SPH_FDSET_OVERFLOW(_fd) ((_fd) < 0 || (_fd) >= (int)FD_SETSIZE)
 
 /// on UNIX, we also check that the descript won't corrupt the stack
 void sphFDSet ( int fd, fd_set * set)
@@ -1238,7 +1238,13 @@ ProtocolType_e ProtoByName ( const CSphString & sProto )
 	else if ( sProto=="mysql41" )	return PROTO_MYSQL41;
 
 	sphFatal ( "unknown listen protocol type '%s'", sProto.cstr() ? sProto.cstr() : "(NULL)" );
-	return PROTO_SPHINX; // fix MSVC warning
+
+	// funny magic
+	// MSVC -O2 whines about unreachable code
+	// everyone else whines about missing return value
+#if !(USE_WINDOWS && defined(NDEBUG))
+	return PROTO_SPHINX;
+#endif
 }
 
 
@@ -8232,7 +8238,7 @@ void TickPreforked ( CSphProcessSharedMutex * pAcceptMutex )
 	g_bAcceptUnlocked = false;
 	pAcceptMutex->Lock ();
 
-	int iClientSock;
+	int iClientSock = -1;
 	char sClientIP[SPH_ADDRESS_SIZE];
 	Listener_t * pListener = NULL;
 	if ( !g_bGotSigterm )

@@ -4990,6 +4990,12 @@ void CSphWriter::SeekTo ( SphOffset_t iPos )
 	{
 		assert ( iPos<m_iWritten ); // seeking forward in a writer, we don't support it
 		sphSeek ( m_iFD, iPos, SEEK_SET );
+
+		// seeking outside the buffer; so the buffer must be discarded
+		// also, current write position must be adjusted
+		m_pPool = m_pBuffer;
+		m_iPoolUsed = 0;
+		m_iWritten = iPos;
 	}
 	m_iPos = iPos;
 }
@@ -5600,14 +5606,14 @@ int CSphBin::ReadHit ( CSphAggregateHit * pOut, int iRowitems, CSphRowitem * pRo
 				case BIN_POS:
 					if ( m_eMode==SPH_HITLESS_ALL )
 					{
-						tHit.m_uFieldMask = ReadVLB();
+						tHit.m_uFieldMask = (DWORD)ReadVLB();
 						m_eState = BIN_DOC;
 					}
 					else if ( m_eMode==SPH_HITLESS_SOME )
 					{
 						if ( uDelta & 1 )
 						{
-							tHit.m_uFieldMask = ReadVLB();
+							tHit.m_uFieldMask = (DWORD)ReadVLB();
 							m_eState = BIN_DOC;
 						}
 						uDelta >>= 1;
@@ -11321,9 +11327,18 @@ void CSphIndex_VLN::DumpHitlist ( FILE * fp, const char * sKeyword )
 			break;
 		tKeyword.SeekHitlist ( tKeyword.m_iHitlistPos );
 
+		int iHits = 0;
 		while ( DWORD uHit = tKeyword.GetNextHit() )
 		{
 			fprintf ( fp, "doc="DOCID_FMT", hit=0x%08x\n", tKeyword.m_tDoc.m_iDocID, uHit );
+			iHits++;
+		}
+
+		if ( !iHits )
+		{
+			uint64_t uOff = tKeyword.m_iHitlistPos;
+			fprintf ( fp, "doc="DOCID_FMT", NO HITS, inline=%d, off=%"PRIi64"\n",
+				tKeyword.m_tDoc.m_iDocID, (int)(uOff>>63), (uOff<<1)>>1 );
 		}
 	}
 }
@@ -15741,7 +15756,7 @@ BYTE ** CSphSource_SQL::NextDocument ( CSphString & sError )
 
 	// cleanup attrs
 	for ( int i=0; i<m_tSchema.GetRowSize(); i++ )
-		m_tDocInfo.m_pDynamic[i] = NULL;
+		m_tDocInfo.m_pDynamic[i] = 0;
 
 	// split columns into fields and attrs
 	for ( int i=0; i<m_tSchema.m_iBaseFields; i++ )
@@ -18385,7 +18400,7 @@ bool CSphSource_ODBC::SqlQuery ( const char * sQuery )
 			return false;
 
 		int iBuffLen = DEFAULT_COL_SIZE;
-		if ( uColSize && uColSize<MAX_COL_SIZE )
+		if ( uColSize && (int)uColSize<MAX_COL_SIZE )
 			iBuffLen = uColSize+1;
 
 		tCol.m_dContents.Resize ( iBuffLen );
