@@ -565,10 +565,6 @@ struct RtHitReader_t
 
 //////////////////////////////////////////////////////////////////////////
 
-#if USE_WINDOWS
-#define __thread __declspec(thread)
-#endif
-
 /// forward ref
 struct RtIndex_t;
 
@@ -587,7 +583,7 @@ struct RtAccum_t
 };
 
 /// TLS indexing accumulator (we disallow two uncommitted adds within one thread; and so need at most one)
-__thread RtAccum_t * g_pTlsAccum = NULL;
+SphThreadKey_t g_tTlsAccumKey;
 
 /// RAM based index
 struct RtIndex_t : public ISphRtIndex, public ISphNoncopyable
@@ -779,18 +775,20 @@ void AccumCleanup ( void * pArg )
 RtAccum_t * RtIndex_t::AcquireAccum ()
 {
 	// check that no other index is holding the acc
-	if ( g_pTlsAccum && g_pTlsAccum->m_pIndex!=NULL && g_pTlsAccum->m_pIndex!=this )
+	RtAccum_t * pAcc =  (RtAccum_t*) sphThreadGet ( g_tTlsAccumKey );
+	if ( pAcc && pAcc->m_pIndex!=NULL && pAcc->m_pIndex!=this )
 		return NULL;
 
-	if ( !g_pTlsAccum )
+	if ( !pAcc )
 	{
-		g_pTlsAccum = new RtAccum_t ();
-		sphThreadOnExit ( AccumCleanup, g_pTlsAccum );
+		pAcc = new RtAccum_t ();
+		sphThreadSet ( g_tTlsAccumKey, pAcc );
+		sphThreadOnExit ( AccumCleanup, pAcc );
 	}
 
-	assert ( g_pTlsAccum->m_pIndex==NULL || g_pTlsAccum->m_pIndex==this );
-	g_pTlsAccum->m_pIndex = this;
-	return g_pTlsAccum;
+	assert ( pAcc->m_pIndex==NULL || pAcc->m_pIndex==this );
+	pAcc->m_pIndex = this;
+	return pAcc;
 }
 
 
@@ -950,6 +948,12 @@ const RtWord_t * RtIndex_t::CopyWord ( RtSegment_t * pDst, RtWordWriter_t & tOut
 	RtWord_t tNewWord = *pWord;
 	tNewWord.m_uDoc = tOutDoc.ZipDocPtr();
 
+#ifndef NDEBUG
+	RtAccum_t * pAccCheck = (RtAccum_t*) sphThreadGet ( g_tTlsAccumKey );
+	assert (!( pSrc->m_bTlsKlist && !pAccCheck )); // if flag is there, acc must be there
+	assert ( !pAccCheck || pAccCheck->m_pIndex==this ); // *must* be holding acc during merge
+#endif
+
 	// copy docs
 	for ( ;; )
 	{
@@ -958,10 +962,13 @@ const RtWord_t * RtIndex_t::CopyWord ( RtSegment_t * pDst, RtWordWriter_t & tOut
 			break;
 
 		// apply klist
-		assert (!( pSrc->m_bTlsKlist && !g_pTlsAccum )); // if flag is there, acc must be there
-		assert ( !g_pTlsAccum || g_pTlsAccum->m_pIndex==this ); // *must* be holding acc during merge
-		if ( pSrc->m_dKlist.BinarySearch ( pDoc->m_uDocID )
-			|| ( pSrc->m_bTlsKlist && g_pTlsAccum->m_dAccumKlist.BinarySearch ( pDoc->m_uDocID ) ) )
+		bool bKill = ( pSrc->m_dKlist.BinarySearch ( pDoc->m_uDocID )!=NULL );
+		if ( !bKill && pSrc->m_bTlsKlist )
+		{
+			RtAccum_t * pAcc = (RtAccum_t*) sphThreadGet ( g_tTlsAccumKey );
+			bKill = ( pAcc->m_dAccumKlist.BinarySearch ( pDoc->m_uDocID )!=NULL );
+		}
+		if ( bKill )
 		{
 			tNewWord.m_uDocs--;
 			tNewWord.m_uHits -= pDoc->m_uHits;
@@ -1040,13 +1047,17 @@ void RtIndex_t::MergeWord ( RtSegment_t * pSeg, const RtSegment_t * pSrc1, const
 	const RtDoc_t * pDoc1 = tIn1.UnzipDoc();
 	const RtDoc_t * pDoc2 = tIn2.UnzipDoc();
 
+#ifndef NDEBUG
+	RtAccum_t * pAcc = (RtAccum_t*) sphThreadGet ( g_tTlsAccumKey );
+#endif
+
 	while ( pDoc1 || pDoc2 )
 	{
 		if ( pDoc1 && pDoc2 && pDoc1->m_uDocID==pDoc2->m_uDocID )
 		{
 			// dupe, must (!) be killed in the first segment, might be in both
 			assert ( pSrc1->m_dKlist.BinarySearch ( pDoc1->m_uDocID )
-				|| ( pSrc1->m_bTlsKlist && g_pTlsAccum && g_pTlsAccum->m_dAccumKlist.BinarySearch ( pDoc1->m_uDocID ) ) );
+				|| ( pSrc1->m_bTlsKlist && pAcc && pAcc->m_dAccumKlist.BinarySearch ( pDoc1->m_uDocID ) ) );
 			if ( !pSrc2->m_dKlist.BinarySearch ( pDoc2->m_uDocID ) )
 				CopyDoc ( pSeg, tOutDoc, &tWord, pSrc2, pDoc2 );
 			pDoc2 = tIn2.UnzipDoc();
@@ -1112,10 +1123,14 @@ public:
 
 		// FIXME? OPTIMIZE? must not scan tls (open txn) in readers; can implement lighter iterator
 		// FIXME? OPTIMIZE? maybe we should just rely on the segment order and don't scan tls klist here
-		if ( bWriter && pSeg->m_bTlsKlist && g_pTlsAccum && g_pTlsAccum->m_dAccumKlist.GetLength() )
+		if ( bWriter && pSeg->m_bTlsKlist )
 		{
-			m_pTlsKlist = &g_pTlsAccum->m_dAccumKlist[0];
-			m_pTlsKlistMax = m_pTlsKlist + g_pTlsAccum->m_dAccumKlist.GetLength();
+			RtAccum_t * pAcc = (RtAccum_t*) sphThreadGet ( g_tTlsAccumKey );
+			if ( pAcc && pAcc->m_dAccumKlist.GetLength() )
+			{
+				m_pTlsKlist = &pAcc->m_dAccumKlist[0];
+				m_pTlsKlistMax = m_pTlsKlist + pAcc->m_dAccumKlist.GetLength();
+			}
 		}
 	}
 
@@ -1983,10 +1998,12 @@ ISphRtIndex * sphCreateIndexRT ( const CSphSchema & tSchema )
 void sphRTInit ()
 {
 	Verify ( RtSegment_t::m_tSegmentSeq.Init() );
+	Verify ( sphThreadKeyCreate ( &g_tTlsAccumKey ) );
 }
 
 void sphRTDone ()
 {
+	sphThreadKeyDelete ( g_tTlsAccumKey );
 	Verify ( RtSegment_t::m_tSegmentSeq.Done() );
 }
 
