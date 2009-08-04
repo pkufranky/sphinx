@@ -934,6 +934,8 @@ void Shutdown ()
 	CloseHandle ( g_hPipe );
 #endif
 
+	sphRTDone();
+
 	if ( g_bHeadDaemon )
 		sphInfo ( "shutdown complete" );
 }
@@ -7284,6 +7286,9 @@ ESphAddIndex AddIndex ( const char * szIndexName, const CSphConfigSection & hInd
 		tIdx.m_pSchema = tIdx.m_pIndex->GetSchema();
 		tIdx.m_bEnabled = true;
 
+		if ( hIndex("path") )
+			tIdx.m_sIndexPath = hIndex["path"];
+
 		if ( !g_hIndexes.Add ( tIdx, szIndexName ) )
 		{
 			sphWarning ( "INTERNAL ERROR: index '%s': hash add failed - NOT SERVING", szIndexName );
@@ -8927,6 +8932,8 @@ int WINAPI ServiceMain ( int argc, char **argv )
 	///////////
 	// startup
 	///////////
+
+	sphRTInit();
 
 	// handle my signals
 	SetSignalHandlers ();

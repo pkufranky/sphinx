@@ -615,6 +615,7 @@ private:
 	void						CopyDoc ( RtSegment_t * pSeg, RtDocWriter_t & tOutDoc, RtWord_t * pWord, const RtSegment_t * pSrc, const RtDoc_t * pDoc );
 
 	void						DumpToDisk ( const char * sFilename );
+	void						DumpHeader ( const char * sFilename, int iCheckpoints, SphOffset_t iCheckpointsPosition );
 
 public:
 #if USE_WINDOWS
@@ -1600,6 +1601,7 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 	wrDict.ZipInt ( 0 ); // indicate checkpoint
 	wrDict.ZipOffset ( wrDocs.GetPos() - uLastDocpos ); // store last doclist length
 
+	SphOffset_t iCheckpointsPosition = wrDict.GetPos();
 	if ( dCheckpoints.GetLength() )
 		wrDict.PutBytes ( &dCheckpoints[0], dCheckpoints.GetLength()*sizeof(Checkpoint_t) );
 
@@ -1640,6 +1642,20 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 		pRows[iMinRow] = pRowIterators[iMinRow]->GetNextAliveRow();
 	}
 
+	// write dummy string attributes, mva and kill-list files
+	CSphWriter wrDummy;
+	
+	sName.SetSprintf ( "%s.sps", sFilename );
+	wrDummy.OpenFile ( sName.cstr(), sError );
+	wrDummy.PutBytes ( &bDummy, 1 );
+	wrDummy.CloseFile ();
+
+	sName.SetSprintf ( "%s.spk", sFilename ); wrDummy.OpenFile ( sName.cstr(), sError ); wrDummy.CloseFile ();
+	sName.SetSprintf ( "%s.spm", sFilename ); wrDummy.OpenFile ( sName.cstr(), sError ); wrDummy.CloseFile ();
+
+	// header
+	DumpHeader ( sFilename, dCheckpoints.GetLength(), iCheckpointsPosition );
+
 	// cleanup
 	ARRAY_FOREACH ( i, pWordReaders )
 		SafeDelete ( pWordReaders[i] );
@@ -1655,8 +1671,125 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 	wrRows.CloseFile ();
 
 	Verify ( m_tRwlock.Unlock() );
-	Verify ( m_tWriterMutex.Lock() );
+	Verify ( m_tWriterMutex.Unlock() );
 }
+
+
+static void WriteFileInfo ( CSphWriter & tWriter, const CSphSavedFile & tInfo )
+{
+	tWriter.PutOffset ( tInfo.m_uSize );
+	tWriter.PutOffset ( tInfo.m_uCTime );
+	tWriter.PutOffset ( tInfo.m_uMTime );
+	tWriter.PutDword ( tInfo.m_uCRC32 );
+}
+
+
+static void WriteSchemaColumn ( CSphWriter & tWriter, const CSphColumnInfo & tColumn )
+{
+	int iLen = strlen ( tColumn.m_sName.cstr() );
+	tWriter.PutDword ( iLen );
+	tWriter.PutBytes ( tColumn.m_sName.cstr(), iLen );
+
+	DWORD eAttrType = tColumn.m_eAttrType;
+	if ( eAttrType==SPH_ATTR_WORDCOUNT )
+		eAttrType = SPH_ATTR_INTEGER;
+	tWriter.PutDword ( eAttrType );
+
+	tWriter.PutDword ( tColumn.m_tLocator.CalcRowitem() ); // for backwards compatibility
+	tWriter.PutDword ( tColumn.m_tLocator.m_iBitOffset );
+	tWriter.PutDword ( tColumn.m_tLocator.m_iBitCount );
+
+	tWriter.PutByte ( tColumn.m_bPayload );
+}
+
+
+void RtIndex_t::DumpHeader ( const char * sFilename, int iCheckpoints, SphOffset_t iCheckpointsPosition )
+{
+	static const DWORD INDEX_MAGIC_HEADER	= 0x58485053;	///< my magic 'SPHX' header
+	static const DWORD INDEX_FORMAT_VERSION	= 19;			///< my format version
+
+	CSphWriter tWriter;
+	CSphString sName, sError;
+	sName.SetSprintf ( "%s.sph", sFilename );
+	tWriter.OpenFile ( sName.cstr(), sError );
+
+	// format
+	tWriter.PutDword ( INDEX_MAGIC_HEADER );
+	tWriter.PutDword ( INDEX_FORMAT_VERSION );
+
+	tWriter.PutDword ( 0 ); // use-64bit
+	tWriter.PutDword ( SPH_DOCINFO_EXTERN ); 
+
+	// schema
+	tWriter.PutDword ( m_tSchema.m_dFields.GetLength() );
+	ARRAY_FOREACH ( i, m_tSchema.m_dFields )
+		WriteSchemaColumn ( tWriter, m_tSchema.m_dFields[i] );
+
+	tWriter.PutDword ( m_tSchema.GetAttrsCount() );
+	for ( int i=0; i<m_tSchema.GetAttrsCount(); i++ )
+		WriteSchemaColumn ( tWriter, m_tSchema.GetAttr(i) );
+
+	tWriter.PutOffset ( 0 ); // min docid
+
+	// wordlist checkpoints
+	tWriter.PutOffset ( iCheckpointsPosition );
+	tWriter.PutDword ( iCheckpoints );
+
+	// stats
+	tWriter.PutDword ( m_tStats.m_iTotalDocuments );
+	tWriter.PutOffset ( m_tStats.m_iTotalBytes );
+
+	// index settings
+	tWriter.PutDword ( m_tSettings.m_iMinPrefixLen );
+	tWriter.PutDword ( m_tSettings.m_iMinInfixLen );
+	tWriter.PutByte ( m_tSettings.m_bHtmlStrip ? 1 : 0 );
+	tWriter.PutString ( m_tSettings.m_sHtmlIndexAttrs.cstr () );
+	tWriter.PutString ( m_tSettings.m_sHtmlRemoveElements.cstr () );
+	tWriter.PutByte ( m_tSettings.m_bIndexExactWords ? 1 : 0 );
+	tWriter.PutDword ( m_tSettings.m_eHitless );
+	tWriter.PutDword ( SPH_HIT_FORMAT_PLAIN );
+
+	// tokenizer
+	assert ( m_pTokenizer );
+	const CSphTokenizerSettings & tSettings = m_pTokenizer->GetSettings ();
+	tWriter.PutByte ( tSettings.m_iType );
+	tWriter.PutString ( tSettings.m_sCaseFolding.cstr () );
+	tWriter.PutDword ( tSettings.m_iMinWordLen );
+	tWriter.PutString ( tSettings.m_sSynonymsFile.cstr () );
+	WriteFileInfo ( tWriter, m_pTokenizer->GetSynFileInfo () );
+	tWriter.PutString ( tSettings.m_sBoundary.cstr () );
+	tWriter.PutString ( tSettings.m_sIgnoreChars.cstr () );
+	tWriter.PutDword ( tSettings.m_iNgramLen );
+	tWriter.PutString ( tSettings.m_sNgramChars.cstr () );
+	tWriter.PutString ( tSettings.m_sBlendChars.cstr () );
+
+	// dictionary
+	assert ( m_pDict );
+
+	const CSphDictSettings & tDict = m_pDict->GetSettings ();
+	tWriter.PutString ( tDict.m_sMorphology.cstr () );
+	tWriter.PutString ( tDict.m_sStopwords.cstr () );
+	
+	const CSphVector <CSphSavedFile> & dSWFileInfos = m_pDict->GetStopwordsFileInfos ();
+	tWriter.PutDword ( dSWFileInfos.GetLength () );
+	ARRAY_FOREACH ( i, dSWFileInfos )
+	{
+		tWriter.PutString ( dSWFileInfos [i].m_sFilename.cstr () );
+		WriteFileInfo ( tWriter, dSWFileInfos [i] );
+	}
+
+	const CSphSavedFile & tWFFileInfo = m_pDict->GetWordformsFileInfo ();
+	tWriter.PutString ( tDict.m_sWordforms.cstr () );
+	WriteFileInfo ( tWriter, tWFFileInfo );
+	tWriter.PutDword ( tDict.m_iMinStemmingLen );
+
+	// kill-list size
+	tWriter.PutDword ( 0 );
+
+	// done
+	tWriter.CloseFile ();
+}
+
 
 //////////////////////////////////////////////////////////////////////////
 // SEARCHING
