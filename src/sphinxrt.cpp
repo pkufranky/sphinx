@@ -2214,10 +2214,54 @@ bool RtIndex_t::MultiQueryEx ( int iQueries, CSphQuery * ppQueries, CSphQueryRes
 	return bResult;
 }
 
-bool RtIndex_t::GetKeywords ( CSphVector <CSphKeywordInfo> &, const char *, bool )
+bool RtIndex_t::GetKeywords ( CSphVector<CSphKeywordInfo> & dKeywords, const char * sQuery, bool bGetStats )
 {
-	/*!COMMIT*/
-	return false;
+	m_tRwlock.ReadLock(); // this is actually needed only if they want stats
+
+	if ( !m_pSegments.GetLength() )
+	{
+		m_tRwlock.Unlock();
+		return true;
+	}
+
+	RtQword_t tQword;
+	RtQwordSetup_t tSetup;
+	tSetup.m_pIndex = this;
+
+	CSphString sBuffer ( sQuery );
+	m_pTokenizer->SetBuffer ( (BYTE *)sBuffer.cstr(), sBuffer.Length() );
+
+	while ( BYTE * pToken = m_pTokenizer->GetToken() )
+	{
+		const char * sToken = (const char *)pToken; 
+		CSphString sWord ( sToken );
+		SphWordID_t iWord = m_pDict->GetWordID ( pToken );
+		if ( iWord )
+		{
+			CSphKeywordInfo & tInfo = dKeywords.Add();
+			tInfo.m_sTokenized = sWord;
+			tInfo.m_sNormalized = sToken;
+			tInfo.m_iDocs = 0;
+			tInfo.m_iHits = 0;
+
+			if ( !bGetStats ) continue;
+
+			ARRAY_FOREACH ( i, m_pSegments )
+			{
+				tQword.Reset();
+				tQword.m_iWordID = iWord;
+				
+				tSetup.m_pSeg = m_pSegments[i];
+				tSetup.QwordSetup ( &tQword );
+
+				tInfo.m_iDocs += tQword.m_iDocs;
+				tInfo.m_iHits += tQword.m_iHits;
+			}
+		}
+	}
+
+	m_tRwlock.Unlock();
+	return true;
 }
 
 //////////////////////////////////////////////////////////////////////////
