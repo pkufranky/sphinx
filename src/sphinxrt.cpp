@@ -9,7 +9,7 @@
 
 //////////////////////////////////////////////////////////////////////////
 
-#define	COMPRESSED_WORDLIST		0
+#define	COMPRESSED_WORDLIST		1
 #define	COMPRESSED_DOCLIST		1
 #define COMPRESSED_HITLIST		1
 
@@ -638,7 +638,7 @@ public:
 	virtual bool				Mlock () { return true; }
 
 	virtual int					UpdateAttributes ( const CSphAttrUpdate & tUpd ) { return -1; }
-	virtual bool				SaveAttributes () { return false; }
+	virtual bool				SaveAttributes () { return true; }
 
 	virtual void				DebugDumpHeader ( FILE * fp, const char * sHeaderName ) {}
 	virtual void				DebugDumpDocids ( FILE * fp ) {}
@@ -1324,7 +1324,7 @@ void RtIndex_t::Commit ()
 
 	// prepare new segments vector
 	// create more new segments by merging as needed
-	// do not (!) kill processed old segments just yet, as sreaders might still need them
+	// do not (!) kill processed old segments just yet, as readers might still need them
 	CSphVector<RtSegment_t*> dSegments;
 	CSphVector<RtSegment_t*> dToKill;
 
@@ -1377,7 +1377,7 @@ void RtIndex_t::Commit ()
 			}
 		}
 
-		// we did not check for existance in K-list, only in segment
+		// we did not check for existence in K-list, only in segment
 		// so need to use Uniq(), not just Sort()
 		pSeg->m_dKlist.Uniq ();
 
@@ -1585,8 +1585,9 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 		}
 
 		// move words forward
+		SphWordID_t uMinID = pWord->m_uWordID; // because pWord contents will move forward too!
 		ARRAY_FOREACH ( i, pWords )
-			if ( pWords[i] && pWords[i]->m_uWordID==pWord->m_uWordID )
+			if ( pWords[i] && pWords[i]->m_uWordID==uMinID )
 				pWords[i] = pWordReaders[i]->UnzipWord();
 
 		// cleanup
