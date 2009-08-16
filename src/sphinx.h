@@ -1941,7 +1941,7 @@ public:
 class CSphQueryResult : public CSphQueryResultMeta
 {
 public:
-	CSphVector<CSphMatch,true>	m_dMatches;			///< top matching documents, no more than MAX_MATCHES
+	CSphSwapVector<CSphMatch>	m_dMatches;			///< top matching documents, no more than MAX_MATCHES
 
 	CSphSchema				m_tSchema;			///< result schema
 	const DWORD *			m_pMva;				///< pointer to MVA storage

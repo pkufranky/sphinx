@@ -51,6 +51,7 @@ struct CSphMemHeader
 	CSphMemHeader *	m_pPrev;
 };
 
+static CSphStaticMutex	g_tAllocsMutex;
 
 static int				g_iCurAllocs	= 0;
 static int				g_iAllocsId		= 0;
@@ -67,6 +68,7 @@ void * sphDebugNew ( size_t iSize, const char * sFile, int iLine, bool bArray )
 		sphDie ( "out of memory (unable to allocate %"PRIu64" bytes)", (uint64_t)iSize ); // FIXME! this may fail with malloc error too
 
 	*(DWORD*)( pBlock+iSize+sizeof(CSphMemHeader) ) = MEMORY_MAGIC_END;
+	g_tAllocsMutex.Lock();
 
 	CSphMemHeader * pHeader = (CSphMemHeader*) pBlock;
 	pHeader->m_uMagic = bArray ? MEMORY_MAGIC_ARRAY : MEMORY_MAGIC_PLAIN;
@@ -90,6 +92,7 @@ void * sphDebugNew ( size_t iSize, const char * sFile, int iLine, bool bArray )
 	g_iPeakAllocs = Max ( g_iPeakAllocs, g_iCurAllocs );
 	g_iPeakBytes = Max ( g_iPeakBytes, g_iCurBytes );
 
+	g_tAllocsMutex.Unlock();
 	return pHeader+1;
 }
 
@@ -98,6 +101,7 @@ void sphDebugDelete ( void * pPtr, bool bArray )
 {
 	if ( !pPtr )
 		return;
+	g_tAllocsMutex.Lock();
 
 	CSphMemHeader * pHeader = ((CSphMemHeader*)pPtr)-1;
 	switch ( pHeader->m_uMagic )
@@ -156,6 +160,8 @@ void sphDebugDelete ( void * pPtr, bool bArray )
 #if SPH_DEBUG_DOFREE
 	::free ( pHeader );
 #endif
+
+	g_tAllocsMutex.Unlock();
 }
 
 
@@ -179,8 +185,9 @@ int sphAllocsLastID ()
 
 void sphAllocsDump ( int iFile, int iSinceID )
 {
-	char sBuf [ 1024 ];
+	g_tAllocsMutex.Lock();
 
+	char sBuf [ 1024 ];
 	snprintf ( sBuf, sizeof(sBuf), "--- dumping allocs since %d ---\n", iSinceID );
 	write ( iFile, sBuf, strlen(sBuf) );
 
@@ -195,6 +202,8 @@ void sphAllocsDump ( int iFile, int iSinceID )
 
 	snprintf ( sBuf, sizeof(sBuf), "--- end of dump ---\n" );
 	write ( iFile, sBuf, strlen(sBuf) );
+
+	g_tAllocsMutex.Unlock();
 }
 
 
@@ -207,6 +216,7 @@ void sphAllocsStats ()
 
 void sphAllocsCheck ()
 {
+	g_tAllocsMutex.Lock();
 	for ( CSphMemHeader * pHeader=g_pAllocs; pHeader; pHeader=pHeader->m_pNext )
 	{
 		BYTE * pBlock = (BYTE*) pHeader;
@@ -219,6 +229,7 @@ void sphAllocsCheck ()
 			sphDie ( "out-of-bounds write beyond block %d allocated at %s(%d)",
 				pHeader->m_iAllocId, pHeader->m_sFile, pHeader->m_iLine );
 	}
+	g_tAllocsMutex.Unlock();
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -250,11 +261,12 @@ void operator delete [] ( void * pPtr )
 // ALLOCACTIONS COUNT/SIZE PROFILER
 //////////////////////////////////////////////////////////////////////////////
 
-#endif
+#else
 #if SPH_ALLOCS_PROFILER
 
 #undef new
 
+static CSphStaticMutex	g_tAllocsMutex;
 static int				g_iCurAllocs	= 0;
 static int				g_iCurBytes		= 0;
 static int				g_iTotalAllocs	= 0;
@@ -267,11 +279,13 @@ void * sphDebugNew ( size_t iSize )
 	if ( !pBlock )
 		sphDie ( "out of memory (unable to allocate %"PRIu64" bytes)", (uint64_t)iSize ); // FIXME! this may fail with malloc error too
 
+	g_tAllocsMutex.Lock ();
 	g_iCurAllocs++;
 	g_iCurBytes += (int)iSize;
 	g_iTotalAllocs++;
 	g_iPeakAllocs = Max ( g_iCurAllocs, g_iPeakAllocs );
 	g_iPeakBytes = Max ( g_iCurBytes, g_iPeakBytes );
+	g_tAllocsMutex.Unlock ();
 
 	*(size_t*) pBlock = iSize;
 	return pBlock + sizeof(size_t);
@@ -285,17 +299,20 @@ void sphDebugDelete ( void * pPtr )
 	size_t * pBlock = (size_t*) pPtr;
 	pBlock--;
 
+	g_tAllocsMutex.Lock ();
 	g_iCurAllocs--;
 	g_iCurBytes -= *pBlock;
-	g_iTotalAllocs--;
+	g_tAllocsMutex.Unlock ();
 
 	::free ( pBlock );
 }
 
 void sphAllocsStats ()
 {
+	g_tAllocsMutex.Lock ();
 	fprintf ( stdout, "--- total-allocs=%d, peak-allocs=%d, peak-bytes=%d\n",
 		g_iTotalAllocs, g_iPeakAllocs, g_iPeakBytes );
+	g_tAllocsMutex.Unlock ();
 }
 
 int	sphAllocBytes ()			{ return g_iCurBytes; }
@@ -345,6 +362,7 @@ void operator delete [] ( void * pPtr )
 		::free ( pPtr );
 }
 
+#endif // SPH_ALLOCS_PROFILER
 #endif // SPH_DEBUG_LEAKS
 
 //////////////////////////////////////////////////////////////////////////
