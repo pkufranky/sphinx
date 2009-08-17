@@ -936,6 +936,9 @@ void Shutdown ()
 
 	sphRTDone();
 
+	if ( g_eWorkers==MPM_THREADS )
+		g_tThdMutex.Done();
+
 	if ( g_bHeadDaemon )
 		sphInfo ( "shutdown complete" );
 }
@@ -7280,14 +7283,27 @@ ESphAddIndex AddIndex ( const char * szIndexName, const CSphConfigSection & hInd
 			}
 		}
 
+		// path
+		if ( !hIndex("path") )
+		{
+			sphWarning ( "index '%s': path must be specified; NOT SERVING", szIndexName );
+			return ADD_ERROR;
+		}
+
+		// RAM chunk size
+		DWORD uRamSize = hIndex.GetSize ( "rt_mem_limit", 32*1024*1024 );
+		if  ( uRamSize<1024*1024 )
+		{
+			sphWarning ( "index '%s': rt_mem_limit below sanity limit, fixing up to 1M", szIndexName );
+			uRamSize = 1024*1024;
+		}
+
 		// index
 		ServedIndex_t tIdx;
-		tIdx.m_pIndex = sphCreateIndexRT ( tSchema );
+		tIdx.m_pIndex = sphCreateIndexRT ( tSchema, uRamSize, hIndex["path"].cstr() );
 		tIdx.m_pSchema = tIdx.m_pIndex->GetSchema();
 		tIdx.m_bEnabled = true;
-
-		if ( hIndex("path") )
-			tIdx.m_sIndexPath = hIndex["path"];
+		tIdx.m_sIndexPath = hIndex["path"];
 
 		if ( !g_hIndexes.Add ( tIdx, szIndexName ) )
 		{

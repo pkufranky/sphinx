@@ -7,6 +7,10 @@
 #include "sphinxrt.h"
 #include "sphinxsearch.h"
 
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <io.h>
+
 //////////////////////////////////////////////////////////////////////////
 
 #define	COMPRESSED_WORDLIST		1
@@ -39,8 +43,8 @@ extern void sphSortDocinfos ( DWORD * pBuf, int iCount, int iStride );
 
 //////////////////////////////////////////////////////////////////////////
 
-template < typename T >
-static inline void ZipT ( CSphVector<BYTE> & dOut, T uValue )
+template < typename T, typename P >
+static inline void ZipT ( CSphVector<BYTE,P> & dOut, T uValue )
 {
 	do 
 	{
@@ -137,20 +141,20 @@ public:
 	int							m_iTag;			///< segment age tag
 
 #if COMPRESSED_WORDLIST
-	CSphVector<BYTE>			m_dWords;
-	CSphVector<RtWordCheckpoint_t> m_dWordCheckpoints;
+	CSphTightVector<BYTE>			m_dWords;
+	CSphVector<RtWordCheckpoint_t>	m_dWordCheckpoints;
 #else
 	CSphVector<RtWord_t>		m_dWords;
 #endif
 
 #if COMPRESSED_DOCLIST
-	CSphVector<BYTE>			m_dDocs;
+	CSphTightVector<BYTE>		m_dDocs;
 #else
 	CSphVector<RtDoc_t>			m_dDocs;
 #endif
 
 #if COMPRESSED_HITLIST
-	CSphVector<BYTE>			m_dHits;
+	CSphTightVector<BYTE>		m_dHits;
 #else
 	CSphVector<DWORD>			m_dHits;
 #endif
@@ -171,12 +175,13 @@ public:
 		m_bTlsKlist = false;
 	}
 
-	int GetSizeBytes () const
+	int64_t GetUsedRam () const
 	{
+		// FIXME! gonna break on vectors over 2GB
 		return
-			m_dWords.GetLength()*sizeof(m_dWords[0]) +
-			m_dDocs.GetLength()*sizeof(m_dDocs[0]) +
-			m_dHits.GetLength()*sizeof(m_dHits[0]);
+			m_dWords.GetLimit()*sizeof(m_dWords[0]) +
+			m_dDocs.GetLimit()*sizeof(m_dDocs[0]) +
+			m_dHits.GetLimit()*sizeof(m_dHits[0]);
 	}
 
 	int GetMergeFactor () const
@@ -224,8 +229,8 @@ bool RtSegment_t::HasDocid ( SphDocID_t uDocid ) const
 
 struct RtDocWriter_t
 {
-	CSphVector<BYTE> *	m_pDocs;
-	SphDocID_t			m_uLastDocID;
+	CSphTightVector<BYTE> *		m_pDocs;
+	SphDocID_t					m_uLastDocID;
 
 	explicit RtDocWriter_t ( RtSegment_t * pSeg )
 		: m_pDocs ( &pSeg->m_dDocs )
@@ -234,7 +239,7 @@ struct RtDocWriter_t
 
 	void ZipDoc ( const RtDoc_t & tDoc )
 	{
-		CSphVector<BYTE> & dDocs = *m_pDocs;
+		CSphTightVector<BYTE> & dDocs = *m_pDocs;
 		ZipDocid ( dDocs, tDoc.m_uDocID - m_uLastDocID );
 		m_uLastDocID = tDoc.m_uDocID;
 		ZipDword ( dDocs, tDoc.m_uFields );
@@ -338,7 +343,7 @@ static const int WORDLIST_CHECKPOINT_SIZE = 1024;
 
 struct RtWordWriter_t
 {
-	CSphVector<BYTE> *					m_pWords;
+	CSphTightVector<BYTE> *				m_pWords;
 	CSphVector<RtWordCheckpoint_t> *	m_pCheckpoints;
 	SphWordID_t							m_uLastWordID;
 	SphDocID_t							m_uLastDoc;
@@ -357,7 +362,7 @@ struct RtWordWriter_t
 
 	void ZipWord ( const RtWord_t & tWord )
 	{
-		CSphVector<BYTE> & tWords = *m_pWords;
+		CSphTightVector<BYTE> & tWords = *m_pWords;
 		if ( ++m_iWords==WORDLIST_CHECKPOINT_SIZE )
 		{
 			RtWordCheckpoint_t & tCheckpoint = m_pCheckpoints->Add();
@@ -457,8 +462,8 @@ struct RtWordReader_t
 
 struct RtHitWriter_t
 {
-	CSphVector<BYTE> *	m_pHits;
-	DWORD				m_uLastHit;
+	CSphTightVector<BYTE> *		m_pHits;
+	DWORD						m_uLastHit;
 
 	explicit RtHitWriter_t ( RtSegment_t * pSeg )
 		: m_pHits ( &pSeg->m_dHits )
@@ -589,20 +594,32 @@ SphThreadKey_t g_tTlsAccumKey;
 struct RtIndex_t : public ISphRtIndex, public ISphNoncopyable
 {
 private:
+	static const DWORD			META_HEADER_MAGIC	= 0x54525053;	///< my magic 'SPRT' header
+	static const DWORD			META_VERSION		= 1;			///< current version
+
+private:
 	const int					m_iStride;
 	CSphVector<RtSegment_t*>	m_pSegments;
 
 	CSphMutex					m_tWriterMutex;
 	mutable CSphRwlock			m_tRwlock;
 
+	int64_t						m_iRamSize;
+	CSphString					m_sPath;
+	int							m_iDiskChunks;
+	CSphVector<CSphIndex*>		m_pDiskChunks;
+	int							m_iLockFD;
+
 public:
-	explicit					RtIndex_t ( const CSphSchema & tSchema );
+	explicit					RtIndex_t ( const CSphSchema & tSchema, int64_t iRamSize, const char * sPath );
 	virtual						~RtIndex_t ();
 
 	bool						AddDocument ( int iFields, const char ** ppFields, const CSphMatch & tDoc, bool bReplace );
 	bool						AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphMatch & tDoc );
 	bool						DeleteDocument ( SphDocID_t uDoc );
 	void						Commit ();
+
+	void						DumpToDisk ( const char * sFilename );
 
 private:
 	/// acquire thread-local indexing accumulator
@@ -614,8 +631,13 @@ private:
 	void						MergeWord ( RtSegment_t * pDst, const RtSegment_t * pSrc1, const RtWord_t * pWord1, const RtSegment_t * pSrc2, const RtWord_t * pWord2, RtWordWriter_t & tOut );
 	void						CopyDoc ( RtSegment_t * pSeg, RtDocWriter_t & tOutDoc, RtWord_t * pWord, const RtSegment_t * pSrc, const RtDoc_t * pDoc );
 
-	void						DumpToDisk ( const char * sFilename );
-	void						DumpHeader ( const char * sFilename, int iCheckpoints, SphOffset_t iCheckpointsPosition );
+	void						SaveMeta ( int iDiskChunks );
+	void						SaveDiskHeader ( const char * sFilename, int iCheckpoints, SphOffset_t iCheckpointsPosition ) const;
+	void						SaveDiskData ( const char * sFilename ) const;
+	void						SaveDiskChunk ();
+	CSphIndex *					LoadDiskChunk ( int iChunk );
+	bool						LoadRamChunk ();
+	bool						SaveRamChunk ();
 
 public:
 #if USE_WINDOWS
@@ -628,9 +650,9 @@ public:
 	virtual int					Build ( const CSphVector<CSphSource*> & dSources, int iMemoryLimit, int iWriteBuffer ) { return 0; }
 	virtual bool				Merge ( CSphIndex * pSource, CSphVector<CSphFilterSettings> & dFilters, bool bMergeKillLists ) { return false; }
 
-	virtual const CSphSchema *	Prealloc ( bool bMlock, CSphString & sWarning ) { return &m_tSchema; }
+	virtual const CSphSchema *	Prealloc ( bool bMlock, CSphString & sWarning );
 	virtual void				Dealloc () {}
-	virtual bool				Preread () { return true; }
+	virtual bool				Preread ();
 	virtual void				SetBase ( const char * sNewBase ) {}
 	virtual bool				Rename ( const char * sNewBase ) { return true; }
 	virtual bool				Lock () { return true; }
@@ -667,9 +689,13 @@ protected:
 };
 
 
-RtIndex_t::RtIndex_t ( const CSphSchema & tSchema )
+RtIndex_t::RtIndex_t ( const CSphSchema & tSchema, int64_t iRamSize, const char * sPath )
 	: ISphRtIndex ( "rtindex" )
 	, m_iStride ( DOCINFO_IDSIZE + tSchema.GetRowSize() )
+	, m_iRamSize ( iRamSize )
+	, m_sPath ( sPath )
+	, m_iDiskChunks ( 0 )
+	, m_iLockFD ( -1 )
 {
 	m_tSchema = tSchema;
 
@@ -686,13 +712,22 @@ RtIndex_t::RtIndex_t ( const CSphSchema & tSchema )
 
 RtIndex_t::~RtIndex_t ()
 {
+	SaveRamChunk ();
+	SaveMeta ( m_iDiskChunks );
+
 	Verify ( m_tWriterMutex.Done() );
 	Verify ( m_tRwlock.Done() );
 
 	ARRAY_FOREACH ( i, m_pSegments )
 		SafeDelete ( m_pSegments[i] );
+
+	ARRAY_FOREACH ( i, m_pDiskChunks )
+		SafeDelete ( m_pDiskChunks[i] );
 }
 
+//////////////////////////////////////////////////////////////////////////
+// INDEXING
+//////////////////////////////////////////////////////////////////////////
 
 class CSphSource_StringVector : public CSphSource_Document
 {
@@ -1332,7 +1367,13 @@ void RtIndex_t::Commit ()
 	if ( pNewSeg )
 		dSegments.Add ( pNewSeg );
 
+	// enforce RAM usage limit
+	int64_t iRamLeft = m_iRamSize;
+	ARRAY_FOREACH ( i, dSegments )
+		iRamLeft = Max ( 0, iRamLeft - dSegments[i]->GetUsedRam() );
+
 	// skip merging if no rows were added
+	bool bDump = false;
 	const int MAX_SEGMENTS = 8;
 	while ( pNewSeg )
 	{
@@ -1345,11 +1386,26 @@ void RtIndex_t::Commit ()
 		if (!( iLen>MAX_SEGMENTS || ( iLen>=2 && dSegments[iLen-1]->GetMergeFactor()*2 > dSegments[iLen-2]->GetMergeFactor() ) ))
 			break;
 
+		// check whether we have enough RAM
+		int64_t iEstimate =
+			CSphTightVectorPolicy<BYTE>::Relimit ( 0, dSegments[iLen-1]->m_dWords.GetLength() + dSegments[iLen-2]->m_dWords.GetLength() ) +
+			CSphTightVectorPolicy<BYTE>::Relimit ( 0, dSegments[iLen-1]->m_dDocs.GetLength() + dSegments[iLen-2]->m_dDocs.GetLength() ) +
+			CSphTightVectorPolicy<BYTE>::Relimit ( 0, dSegments[iLen-1]->m_dHits.GetLength() + dSegments[iLen-2]->m_dHits.GetLength() );
+		if ( iEstimate>iRamLeft )
+		{
+			bDump = true;
+			break;
+		}
+
+		// do it
 		RtSegment_t * pA = dSegments.Pop();
 		RtSegment_t * pB = dSegments.Pop();
 		dSegments.Add ( MergeSegments ( pA, pB ) );
 		dToKill.Add ( pA );
 		dToKill.Add ( pB );
+
+		int64_t iMerged = dSegments.Last()->GetUsedRam();
+		iRamLeft -= Min ( iRamLeft, iMerged );
 	}
 
 	// phase 2, obtain exclusive writer lock
@@ -1400,8 +1456,15 @@ void RtIndex_t::Commit ()
 	pAcc->m_iAccumDocs = 0;
 	pAcc->m_dAccumKlist.Reset();
 
-	// all done, unlock
+	// phase 3, enable readers again
+	// we might need to dump data to disk now
+	// but during the dump, readers can still use RAM chunk data
 	Verify ( m_tRwlock.Unlock() );
+
+	if ( bDump )
+		SaveDiskChunk();
+
+	// all done, enable other writers
 	Verify ( m_tWriterMutex.Unlock() );
 }
 
@@ -1414,6 +1477,9 @@ bool RtIndex_t::DeleteDocument ( SphDocID_t uDoc )
 	return ( pAcc!=NULL );
 }
 
+//////////////////////////////////////////////////////////////////////////
+// LOAD/SAVE
+//////////////////////////////////////////////////////////////////////////
 
 struct Checkpoint_t
 {
@@ -1426,7 +1492,14 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 {
 	Verify ( m_tWriterMutex.Lock() );
 	Verify ( m_tRwlock.WriteLock() );
+	SaveDiskData ( sFilename );
+	Verify ( m_tRwlock.Unlock() );
+	Verify ( m_tWriterMutex.Unlock() );
+}
 
+
+void RtIndex_t::SaveDiskData ( const char * sFilename ) const
+{
 	CSphString sName, sError;
 
 	CSphWriter wrHits, wrDocs, wrDict, wrRows;
@@ -1655,7 +1728,7 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 	sName.SetSprintf ( "%s.spm", sFilename ); wrDummy.OpenFile ( sName.cstr(), sError ); wrDummy.CloseFile ();
 
 	// header
-	DumpHeader ( sFilename, dCheckpoints.GetLength(), iCheckpointsPosition );
+	SaveDiskHeader ( sFilename, dCheckpoints.GetLength(), iCheckpointsPosition );
 
 	// cleanup
 	ARRAY_FOREACH ( i, pWordReaders )
@@ -1670,9 +1743,6 @@ void RtIndex_t::DumpToDisk ( const char * sFilename )
 	wrDocs.CloseFile ();
 	wrDict.CloseFile ();
 	wrRows.CloseFile ();
-
-	Verify ( m_tRwlock.Unlock() );
-	Verify ( m_tWriterMutex.Unlock() );
 }
 
 
@@ -1704,7 +1774,7 @@ static void WriteSchemaColumn ( CSphWriter & tWriter, const CSphColumnInfo & tCo
 }
 
 
-void RtIndex_t::DumpHeader ( const char * sFilename, int iCheckpoints, SphOffset_t iCheckpointsPosition )
+void RtIndex_t::SaveDiskHeader ( const char * sFilename, int iCheckpoints, SphOffset_t iCheckpointsPosition ) const
 {
 	static const DWORD INDEX_MAGIC_HEADER	= 0x58485053;	///< my magic 'SPHX' header
 	static const DWORD INDEX_FORMAT_VERSION	= 19;			///< my format version
@@ -1791,6 +1861,278 @@ void RtIndex_t::DumpHeader ( const char * sFilename, int iCheckpoints, SphOffset
 	tWriter.CloseFile ();
 }
 
+
+#if USE_WINDOWS
+#undef rename
+int rename ( const char * sOld, const char * sNew )
+{
+	if ( MoveFileEx ( sOld, sNew, MOVEFILE_REPLACE_EXISTING ) )
+		return 0;
+	errno = GetLastError();
+	return -1;
+}
+#endif
+
+
+void RtIndex_t::SaveMeta ( int iDiskChunks )
+{
+	// sanity check
+	assert ( m_iLockFD>=0 );
+
+	// write new meta
+	CSphString sMeta, sMetaNew;
+	sMeta.SetSprintf ( "%s.meta", m_sPath.cstr() );
+	sMetaNew.SetSprintf ( "%s.meta.new", m_sPath.cstr() );
+
+	CSphWriter wrMeta;
+	if ( !wrMeta.OpenFile ( sMetaNew, m_sLastError ) )
+		sphDie ( "failed to serialize meta: %s", m_sLastError.cstr() ); // !COMMIT handle this gracefully
+	wrMeta.PutDword ( META_HEADER_MAGIC );
+	wrMeta.PutDword ( META_VERSION );
+	wrMeta.PutDword ( iDiskChunks );
+	wrMeta.CloseFile();
+
+	// rename
+	if ( ::rename ( sMetaNew.cstr(), sMeta.cstr() ) )
+		sphDie ( "failed to rename meta (src=%s, dst=%s, errno=%d, error=%s)",
+			sMetaNew.cstr(), sMeta.cstr(), errno, strerror(errno) ); // !COMMIT handle this gracefully
+}
+
+
+void RtIndex_t::SaveDiskChunk ()
+{
+	CSphString sError;
+	if ( !m_pSegments.GetLength() )
+		return;
+
+	// dump it
+	CSphString sNewChunk;
+	sNewChunk.SetSprintf ( "%s.%d", m_sPath.cstr(), m_iDiskChunks );
+	SaveDiskData ( sNewChunk.cstr() );
+
+	// bring new disk chunk online
+	CSphIndex * pDiskChunk = LoadDiskChunk ( m_iDiskChunks );
+	assert ( pDiskChunk );
+
+	// save updated meta
+	SaveMeta ( m_iDiskChunks+1 );
+
+	// FIXME! add binlog cleanup here once we have binlogs
+
+	// get exclusive lock again, gotta reset RAM chunk now
+	Verify ( m_tRwlock.WriteLock() );
+	ARRAY_FOREACH ( i, m_pSegments )
+		SafeDelete ( m_pSegments[i] );
+	m_pSegments.Reset();
+	m_iDiskChunks++;
+	m_pDiskChunks.Add ( pDiskChunk );
+	Verify ( m_tRwlock.Unlock() );
+}
+
+
+CSphIndex * RtIndex_t::LoadDiskChunk ( int iChunk )
+{
+	CSphString sChunk, sError;
+	sChunk.SetSprintf ( "%s.%d", m_sPath.cstr(), iChunk );
+
+	CSphIndex * pDiskChunk = sphCreateIndexPhrase ( sChunk.cstr() );
+	if ( pDiskChunk )
+	{
+		if ( !pDiskChunk->Prealloc ( false, sError ) || !pDiskChunk->Preread() )
+			SafeDelete ( pDiskChunk );
+	}
+	if ( !pDiskChunk )
+		sphDie ( "failed to load disk chunk '%s'", sChunk.cstr() ); // !COMMIT handle this gracefully
+
+	return pDiskChunk;
+}
+
+
+const CSphSchema * RtIndex_t::Prealloc ( bool, CSphString & )
+{
+	// locking uber alles
+	// in RT backed case, we just must be multi-threaded
+	// so we simply lock here, and ignore Lock/Unlock hassle caused by forks
+	assert ( m_iLockFD<0 );
+
+	CSphString sLock;
+	sLock.SetSprintf ( "%s.lock", m_sPath.cstr() );
+	m_iLockFD = ::open ( sLock.cstr(), SPH_O_NEW, 0644 );
+	if ( m_iLockFD<0 )
+	{
+		m_sLastError.SetSprintf ( "failed to open %s: %s", sLock.cstr(), strerror(errno) );
+		return false;
+	}
+	if ( !sphLockEx ( m_iLockFD, false ) )
+	{
+		m_sLastError.SetSprintf ( "failed to lock %s: %s", sLock.cstr(), strerror(errno) );
+		::close ( m_iLockFD );
+		return false;
+	}
+
+	// check if we have a meta file (kinda-header)
+	CSphString sMeta;
+	sMeta.SetSprintf ( "%s.meta", m_sPath.cstr() );
+
+	// no readable meta? no disk part yet
+	if ( !sphIsReadable ( sMeta.cstr() ) )
+		return &m_tSchema;
+
+	// opened and locked, lets read
+	CSphAutoreader rdMeta;
+	if ( !rdMeta.Open ( sMeta, m_sLastError ) )
+		return NULL;
+
+	if ( rdMeta.GetDword()!=META_HEADER_MAGIC )
+	{
+		m_sLastError.SetSprintf ( "invalid meta file %s", sMeta.cstr() );
+		return NULL;
+	}
+	DWORD uVersion = rdMeta.GetDword();
+	if ( uVersion==0 || uVersion>META_VERSION )
+	{
+		m_sLastError.SetSprintf ( "%s is v.%d, binary is v.%d", sMeta.cstr(), uVersion, META_VERSION );
+		return NULL;
+	}
+	m_iDiskChunks = rdMeta.GetDword();
+
+	// load disk chunks, if any
+	for ( int iChunk=0; iChunk<m_iDiskChunks; iChunk++ )
+	{
+		m_pDiskChunks.Add ( LoadDiskChunk ( iChunk ) );
+		if ( !m_tSchema.CompareTo ( *m_pDiskChunks.Last()->GetSchema(), m_sLastError ) )
+			return NULL;
+	}
+
+	// load ram chunk
+	if ( !LoadRamChunk() )
+		return false;
+
+	return &m_tSchema;
+}
+
+
+bool RtIndex_t::Preread ()
+{
+	// !COMMIT move disk chunks prereading here
+	return true;
+}
+
+
+template < typename T, typename P >
+static void SaveVector ( CSphWriter & tWriter, const CSphVector<T,P> & tVector )
+{
+	tWriter.PutDword ( tVector.GetLength() );
+	if ( tVector.GetLength() )
+		tWriter.PutBytes ( &tVector[0], tVector.GetLength()*sizeof(T) );
+}
+
+
+template < typename T, typename P >
+static void LoadVector ( CSphAutoreader & tReader, CSphVector<T,P> & tVector )
+{
+	tVector.Resize ( tReader.GetDword() ); // FIXME? sanitize?
+	if ( tVector.GetLength() )
+		tReader.GetBytes ( &tVector[0], tVector.GetLength()*sizeof(T) );
+}
+
+
+bool RtIndex_t::SaveRamChunk ()
+{
+	CSphString sChunk, sNewChunk;
+	sChunk.SetSprintf ( "%s.ram", m_sPath.cstr() );
+	sNewChunk.SetSprintf ( "%s.ram.new", m_sPath.cstr() );
+
+	CSphWriter wrChunk;
+	if ( !wrChunk.OpenFile ( sNewChunk, m_sLastError ) )
+		return false;
+
+	wrChunk.PutDword ( USE_64BIT );
+	wrChunk.PutDword ( RtSegment_t::m_iSegments );
+	wrChunk.PutDword ( m_pSegments.GetLength() );
+
+	// no locks here, because it's only intended to be called from dtor
+	ARRAY_FOREACH ( iSeg, m_pSegments )
+	{
+		const RtSegment_t * pSeg = m_pSegments[iSeg];
+		wrChunk.PutDword ( pSeg->m_iTag );
+		SaveVector ( wrChunk, pSeg->m_dWords );
+		wrChunk.PutDword ( pSeg->m_dWordCheckpoints.GetLength() );
+		ARRAY_FOREACH ( i, pSeg->m_dWordCheckpoints )
+		{
+			wrChunk.PutOffset ( pSeg->m_dWordCheckpoints[i].m_iOffset );
+			wrChunk.PutOffset ( pSeg->m_dWordCheckpoints[i].m_uWordID );
+		}
+		SaveVector ( wrChunk, pSeg->m_dDocs );
+		SaveVector ( wrChunk, pSeg->m_dHits );
+		wrChunk.PutDword ( pSeg->m_iRows );
+		wrChunk.PutDword ( pSeg->m_iAliveRows );
+		SaveVector ( wrChunk, pSeg->m_dRows );
+		SaveVector ( wrChunk, pSeg->m_dKlist );
+		wrChunk.PutDword ( pSeg->m_dKlist.GetLength() );
+	}
+
+	wrChunk.CloseFile();
+	if ( wrChunk.IsError() )
+		return false;
+
+	// rename
+	if ( ::rename ( sNewChunk.cstr(), sChunk.cstr() ) )
+		sphDie ( "failed to rename ram chunk (src=%s, dst=%s, errno=%d, error=%s)",
+			sNewChunk.cstr(), sChunk.cstr(), errno, strerror(errno) ); // !COMMIT handle this gracefully
+
+	return true;
+}
+
+
+bool RtIndex_t::LoadRamChunk ()
+{
+	CSphString sChunk;
+	sChunk.SetSprintf ( "%s.ram", m_sPath.cstr() );
+
+	if ( !sphIsReadable ( sChunk.cstr(), &m_sLastError ) )
+		return true;
+
+	CSphAutoreader rdChunk;
+	if ( !rdChunk.Open ( sChunk, m_sLastError ) )
+		return false;
+
+	bool bId64 = ( rdChunk.GetDword()!=0 );
+	if ( bId64!=USE_64BIT )
+	{
+		m_sLastError.SetSprintf ( "ram chunk dumped by %s binary; this binary is %s",
+			bId64 ? "id64" : "id32",
+			USE_64BIT ? "id64" : "id32" );
+		return false;
+	}
+
+	int iSegmentSeq = rdChunk.GetDword();
+	m_pSegments.Resize ( rdChunk.GetDword() ); // FIXME? sanitize
+
+	ARRAY_FOREACH ( iSeg, m_pSegments )
+	{
+		RtSegment_t * pSeg = new RtSegment_t ();
+		m_pSegments[iSeg] = pSeg;
+
+		pSeg->m_iTag = rdChunk.GetDword ();
+		LoadVector ( rdChunk, pSeg->m_dWords );
+		pSeg->m_dWordCheckpoints.Resize ( rdChunk.GetDword() );
+		ARRAY_FOREACH ( i, pSeg->m_dWordCheckpoints )
+		{
+			pSeg->m_dWordCheckpoints[i].m_iOffset = (int)rdChunk.GetOffset();
+			pSeg->m_dWordCheckpoints[i].m_uWordID = (SphWordID_t)rdChunk.GetOffset();
+		}
+		LoadVector ( rdChunk, pSeg->m_dDocs );
+		LoadVector ( rdChunk, pSeg->m_dHits );
+		pSeg->m_iRows = rdChunk.GetDword();
+		pSeg->m_iAliveRows = rdChunk.GetDword();
+		LoadVector ( rdChunk, pSeg->m_dRows );
+		LoadVector ( rdChunk, pSeg->m_dKlist );
+	}
+
+	RtSegment_t::m_iSegments = iSegmentSeq;
+	return !rdChunk.GetErrorFlag();
+}
 
 //////////////////////////////////////////////////////////////////////////
 // SEARCHING
@@ -2068,7 +2410,7 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	assert ( ppSorters );
 
 	// empty index, empty result
-	if ( !m_pSegments.GetLength() )
+	if ( !m_pSegments.GetLength() && !m_pDiskChunks.GetLength() )
 	{
 		pResult->m_iQueryTime = 0;
 		m_tRwlock.Unlock ();
@@ -2079,10 +2421,53 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	pResult->m_iQueryTime = 0;
 	int64_t tmQueryStart = sphMicroTimer();
 
+	//////////////////////
+	// search disk chunks
+	//////////////////////
+
+	// force ext2 mode for them
+	pQuery->m_eMode = SPH_MATCH_EXTENDED2;
+
+	// FIXME! slow disk searches could lock out concurrent writes for too long
+	// FIXME! each result will point to its own MVA and string pools
+	// !COMMIT need to setup disk K-list here
+	ARRAY_FOREACH ( iChunk, m_pDiskChunks )
+	{
+		const CSphIndex * pDiskChunk = m_pDiskChunks[iChunk];
+
+		CSphQueryResult tChunkResult;
+		if ( !pDiskChunk->MultiQuery ( pQuery, &tChunkResult, iSorters, ppSorters ) )
+		{
+			// FIXME? maybe handle this more gracefully (convert to a warning)?
+			pResult->m_sError = tChunkResult.m_sError;
+			m_tRwlock.Unlock ();
+			return false;
+		}
+	}
+
+	////////////////////
+	// search RAM chunk
+	////////////////////
+
+	if ( !m_pSegments.GetLength() )
+	{
+		// FIXME! mva and string pools ptrs
+		pResult->m_pMva = NULL;
+		pResult->m_pStrings = NULL;
+
+		// query timer
+		pResult->m_iQueryTime = int( ( sphMicroTimer()-tmQueryStart )/1000 );
+		m_tRwlock.Unlock ();
+		return true;
+	}
+
 	// setup calculations and result schema
 	CSphQueryContext tCtx;
 	if ( !tCtx.SetupCalc ( pResult, ppSorters[0]->GetSchema(), m_tSchema, NULL ) )
+	{
+		m_tRwlock.Unlock ();
 		return false;
+	}
 
 	// setup search terms
 	RtQwordSetup_t tTermSetup;
@@ -2119,7 +2504,10 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 
 	// setup filters
 	if ( !tCtx.CreateFilters ( pQuery, pResult->m_tSchema, NULL, pResult->m_sError ) )
+	{
+		m_tRwlock.Unlock ();
 		return false;
+	}
 
 	// FIXME! OPTIMIZE! check if we can early reject the whole index
 
@@ -2267,9 +2655,9 @@ bool RtIndex_t::GetKeywords ( CSphVector<CSphKeywordInfo> & dKeywords, const cha
 
 //////////////////////////////////////////////////////////////////////////
 
-ISphRtIndex * sphCreateIndexRT ( const CSphSchema & tSchema )
+ISphRtIndex * sphCreateIndexRT ( const CSphSchema & tSchema, DWORD uRamSize, const char * sPath )
 {
-	return new RtIndex_t ( tSchema );
+	return new RtIndex_t ( tSchema, uRamSize, sPath );
 }
 
 void sphRTInit ()

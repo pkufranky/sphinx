@@ -39,7 +39,7 @@ void sphRTInit ();
 void sphRTDone ();
 
 /// RT index factory
-ISphRtIndex * sphCreateIndexRT ( const CSphSchema & tSchema );
+ISphRtIndex * sphCreateIndexRT ( const CSphSchema & tSchema, DWORD uRamSize, const char * sPath );
 
 #endif // _sphinxrt_
 

@@ -11,7 +11,7 @@
 #pragma message("Automatically linking with psapi.lib")
 #endif
 
-const int	COMMIT_STEP = 1;
+const int	COMMIT_STEP = 1000;
 float		g_fTotalMB = 0.0f;
 
 void SetupIndexing ( CSphSource_MySQL * pSrc, const CSphSourceParams_MySQL & tParams )
@@ -161,11 +161,11 @@ void main ()
 
 	ISphTokenizer * pTok = sphCreateUTF8Tokenizer();
 	CSphDict * pDict = sphCreateDictionaryCRC ( tDictSettings, pTok, sError );
-	CSphSource * pSrc = SpawnSource ( "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM rt1 WHERE id<=10000 AND id%2=0", pTok, pDict );
+	CSphSource * pSrc = SpawnSource ( "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM posting WHERE id<=100000 AND id%2=0", pTok, pDict );
 
 	ISphTokenizer * pTok2 = sphCreateUTF8Tokenizer();
 	CSphDict * pDict2 = sphCreateDictionaryCRC ( tDictSettings, pTok, sError );
-	CSphSource * pSrc2 = SpawnSource ( "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM rt1 WHERE id<=10000 AND id%2=1", pTok2, pDict2 );
+	CSphSource * pSrc2 = SpawnSource ( "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM posting WHERE id<=100000 AND id%2=1", pTok2, pDict2 );
 
 	CSphSchema tSrcSchema;
 	if ( !pSrc->UpdateSchema ( &tSrcSchema, sError ) )
@@ -177,7 +177,7 @@ void main ()
 		tSchema.AddAttr ( tSrcSchema.GetAttr(i), false );
 
 	sphRTInit ();
-	ISphRtIndex * pIndex = sphCreateIndexRT ( tSchema );
+	ISphRtIndex * pIndex = sphCreateIndexRT ( tSchema, 32*1024*1024, "data/dump" );
 	pIndex->SetTokenizer ( pTok ); // index will own this pair from now on
 	pIndex->SetDictionary ( pDict );
 	g_pIndex = pIndex;
@@ -201,20 +201,20 @@ void main ()
 	// search
 	DoSearch ( pIndex );
 
-	// dump
-	int64_t tmDump = sphMicroTimer();
+	// shutdown index (should cause dump)
+	int64_t tmShutdown = sphMicroTimer();
 
-	printf ( "pre-dump allocs=%d, bytes=%d\n", sphAllocsCount(), sphAllocBytes() );
-	pIndex->DumpToDisk ( "dump" );
-	printf ( "post-dump allocs=%d, bytes=%d\n", sphAllocsCount(), sphAllocBytes() );
+	printf ( "pre-shutdown allocs=%d, bytes=%d\n", sphAllocsCount(), sphAllocBytes() );
+	SafeDelete ( pIndex );
+	printf ( "post-shutdown allocs=%d, bytes=%d\n", sphAllocsCount(), sphAllocBytes() );
 
 	int64_t tmEnd = sphMicroTimer();
-	printf ( "dump done in %d.%03d sec\n", int((tmEnd-tmDump)/1000000), int(((tmEnd-tmDump)%1000000)/1000) );
-	printf ( "total with dump %d.%03d sec, %.2f MB/sec\n",
+	printf ( "shutdown done in %d.%03d sec\n", int((tmEnd-tmShutdown)/1000000), int(((tmEnd-tmShutdown)%1000000)/1000) );
+	printf ( "total with shutdown %d.%03d sec, %.2f MB/sec\n",
 		int((tmEnd-tmStart)/1000000), int(((tmEnd-tmStart)%1000000)/1000),
 		g_fTotalMB*1000000.0f/(tmEnd-tmStart) );
 
-#if SPH_ALLOCS_PROFILER
+#if SPH_DEBUG_LEAKS || SPH_ALLOCS_PROFILER
 	sphAllocsStats();
 #endif
 #if USE_WINDOWS
