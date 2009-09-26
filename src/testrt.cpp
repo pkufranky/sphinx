@@ -46,7 +46,7 @@ void DoSearch ( CSphIndex * pIndex )
 	} else
 	{
 		sphFlattenQueue ( pSorter, &tResult, 0 );
-		printf ( "%d results found in %d.%03d sec!\n", tResult.m_dMatches.GetLength(), tResult.m_iQueryTime/1000, tResult.m_iQueryTime%1000 ); 
+		printf ( "%d results found in %d.%03d sec!\n", tResult.m_dMatches.GetLength(), tResult.m_iQueryTime/1000, tResult.m_iQueryTime%1000 );
 		ARRAY_FOREACH ( i, tResult.m_dMatches )
 			printf ( "%d. id=" DOCID_FMT ", weight=%d\n", 1+i, tResult.m_dMatches[i].m_iDocID, tResult.m_dMatches[i].m_iWeight );
 	}
@@ -154,7 +154,7 @@ void IndexingThread ( void * pArg )
 }
 
 
-void main ()
+int main ()
 {
 	CSphString sError;
 	CSphDictSettings tDictSettings;

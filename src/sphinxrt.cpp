@@ -9,7 +9,6 @@
 
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <io.h>
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -46,7 +45,7 @@ extern void sphSortDocinfos ( DWORD * pBuf, int iCount, int iStride );
 template < typename T, typename P >
 static inline void ZipT ( CSphVector<BYTE,P> & dOut, T uValue )
 {
-	do 
+	do
 	{
 		BYTE bOut = BYTE( uValue & 0x7f );
 		uValue >>= 7;
@@ -64,7 +63,7 @@ static inline const BYTE * UnzipT ( T * pValue, const BYTE * pIn )
 	BYTE bIn;
 	int iOff = 0;
 
-	do 
+	do
 	{
 		bIn = *pIn++;
 		uValue += (T( bIn & 0x7f )) << iOff;
@@ -99,7 +98,7 @@ struct CmpHit_fn
 	inline bool IsLess ( const CSphWordHit & a, const CSphWordHit & b )
 	{
 		return 	( a.m_iWordID < b.m_iWordID ) ||
-			( a.m_iWordID == b.m_iWordID && a.m_iDocID < b.m_iDocID ) || 
+			( a.m_iWordID == b.m_iWordID && a.m_iDocID < b.m_iDocID ) ||
 			( a.m_iWordID == b.m_iWordID && a.m_iDocID == b.m_iDocID && a.m_iWordPos < b.m_iWordPos );
 	}
 };
@@ -282,7 +281,7 @@ struct RtDocReader_t
 			return NULL;
 
 		const BYTE * pIn = m_pDocs;
-		SphDocID_t uDeltaID;			 
+		SphDocID_t uDeltaID;
 		pIn = UnzipDocid ( &uDeltaID, pIn );
 		m_tDoc.m_uDocID += uDeltaID;
 		pIn = UnzipDword ( &m_tDoc.m_uFields, pIn );
@@ -1668,7 +1667,7 @@ void RtIndex_t::SaveDiskData ( const char * sFilename ) const
 			SafeDelete ( pDocReaders[i] );
 		pSegments.Resize ( 0 );
 		pDocReaders.Resize ( 0 );
-		pDocs.Resize ( 0 );			
+		pDocs.Resize ( 0 );
 	}
 
 	// write checkpoints
@@ -1718,7 +1717,7 @@ void RtIndex_t::SaveDiskData ( const char * sFilename ) const
 
 	// write dummy string attributes, mva and kill-list files
 	CSphWriter wrDummy;
-	
+
 	sName.SetSprintf ( "%s.sps", sFilename );
 	wrDummy.OpenFile ( sName.cstr(), sError );
 	wrDummy.PutBytes ( &bDummy, 1 );
@@ -1789,7 +1788,7 @@ void RtIndex_t::SaveDiskHeader ( const char * sFilename, int iCheckpoints, SphOf
 	tWriter.PutDword ( INDEX_FORMAT_VERSION );
 
 	tWriter.PutDword ( 0 ); // use-64bit
-	tWriter.PutDword ( SPH_DOCINFO_EXTERN ); 
+	tWriter.PutDword ( SPH_DOCINFO_EXTERN );
 
 	// schema
 	tWriter.PutDword ( m_tSchema.m_dFields.GetLength() );
@@ -1840,7 +1839,7 @@ void RtIndex_t::SaveDiskHeader ( const char * sFilename, int iCheckpoints, SphOf
 	const CSphDictSettings & tDict = m_pDict->GetSettings ();
 	tWriter.PutString ( tDict.m_sMorphology.cstr () );
 	tWriter.PutString ( tDict.m_sStopwords.cstr () );
-	
+
 	const CSphVector <CSphSavedFile> & dSWFileInfos = m_pDict->GetStopwordsFileInfos ();
 	tWriter.PutDword ( dSWFileInfos.GetLength () );
 	ARRAY_FOREACH ( i, dSWFileInfos )
@@ -2622,7 +2621,7 @@ bool RtIndex_t::GetKeywords ( CSphVector<CSphKeywordInfo> & dKeywords, const cha
 
 	while ( BYTE * pToken = m_pTokenizer->GetToken() )
 	{
-		const char * sToken = (const char *)pToken; 
+		const char * sToken = (const char *)pToken;
 		CSphString sWord ( sToken );
 		SphWordID_t iWord = m_pDict->GetWordID ( pToken );
 		if ( iWord )
@@ -2639,7 +2638,7 @@ bool RtIndex_t::GetKeywords ( CSphVector<CSphKeywordInfo> & dKeywords, const cha
 			{
 				tQword.Reset();
 				tQword.m_iWordID = iWord;
-				
+
 				tSetup.m_pSeg = m_pSegments[i];
 				tSetup.QwordSetup ( &tQword );
 
