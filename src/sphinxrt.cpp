@@ -2551,9 +2551,12 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 				tMatch.m_pStatic = DOCINFO2ATTRS(pRow); // FIXME! overrides
 
 				tCtx.EarlyCalc ( tMatch );
-				if ( !tCtx.m_pFilter || tCtx.m_pFilter->Eval ( tMatch ) )
-					for ( int iSorter=0; iSorter<iSorters; iSorter++ )
-						ppSorters[iSorter]->Push ( tMatch );
+				if ( tCtx.m_pFilter && !tCtx.m_pFilter->Eval ( tMatch ) )
+					continue;
+
+				tCtx.LateCalc ( tMatch );
+				for ( int iSorter=0; iSorter<iSorters; iSorter++ )
+					ppSorters[iSorter]->Push ( tMatch );
 			}
 		}
 
