@@ -3523,7 +3523,7 @@ ISphRanker * sphCreateRanker ( const XQNode_t * pRoot, ESphRankMode eRankMode, C
 	const int iQwords = hQwords.GetLength ();
 	pResult->m_dWordStats.Resize ( Max ( pResult->m_dWordStats.GetLength(), iQwords ) );
 
-	const CSphSourceStats & tStats = pIndex->GetStats();
+	const CSphSourceStats & tSourceStats = pIndex->GetStats();
 
 	int iQword = 0;
 	hQwords.IterateStart ();
@@ -3535,9 +3535,9 @@ ISphRanker * sphCreateRanker ( const XQNode_t * pRoot, ESphRankMode eRankMode, C
 		float fIDF = 0.0f;
 		if ( tWord.m_iDocs )
 		{
-			
-			float fLogTotal = logf ( float(1+tStats.m_iTotalDocuments) );
-			fIDF = logf ( float(tStats.m_iTotalDocuments-tWord.m_iDocs+1)/float(tWord.m_iDocs) )
+			float fLogTotal = logf ( float ( 1+tSourceStats.m_iTotalDocuments ) );
+			fIDF = logf ( float ( tSourceStats.m_iTotalDocuments-tWord.m_iDocs+1 )
+				/ static_cast<float>(tWord.m_iDocs) )
 				/ ( 2*iQwords*fLogTotal );
 		}
 		tWord.m_fIDF = fIDF;

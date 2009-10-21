@@ -1413,6 +1413,8 @@ void RtIndex_t::Commit ()
 	// and also swap in new segment list
 	m_tRwlock.WriteLock ();
 
+	int iKilled = 0;
+
 	// update K-lists on survivors
 	if ( pAcc->m_dAccumKlist.GetLength() )
 		ARRAY_FOREACH ( iSeg, dSegments )
@@ -1429,6 +1431,7 @@ void RtIndex_t::Commit ()
 			if ( pSeg->HasDocid ( uDocid ) )
 			{
 				pSeg->m_dKlist.Add ( uDocid );
+				iKilled++;
 				pSeg->m_iAliveRows--;
 			}
 		}
@@ -1449,7 +1452,7 @@ void RtIndex_t::Commit ()
 		SafeDelete ( dToKill[i] );
 
 	// update stats
-	m_tStats.m_iTotalDocuments += pAcc->m_iAccumDocs;
+	m_tStats.m_iTotalDocuments += pAcc->m_iAccumDocs - iKilled;
 
 	// finish cleaning up and release accumulator
 	pAcc->m_pIndex = NULL;
