@@ -1237,6 +1237,7 @@ protected:
 	bool		m_bWarnedMax;
 
 	SphDocID_t	VerifyID ( SphDocID_t uID );
+	void		AddHitFor ( SphWordID_t iWordID, DWORD iWordPos );
 };
 
 

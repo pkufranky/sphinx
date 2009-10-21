@@ -14775,6 +14775,16 @@ SphDocID_t CSphSource::VerifyID ( SphDocID_t uID )
 	return uID;
 }
 
+void CSphSource::AddHitFor ( SphWordID_t iWordID, DWORD iWordPos )
+{
+	if ( !iWordID )
+		return;
+	CSphWordHit & tHit = m_dHits.Add ();
+	tHit.m_iDocID = m_tDocInfo.m_iDocID;
+	tHit.m_iWordID = iWordID;
+	tHit.m_iWordPos = iWordPos;
+}
+
 
 bool CSphSource::IterateJoinedHits ( CSphString & )
 {
@@ -14805,7 +14815,6 @@ bool CSphSource_Document::IterateHitsNext ( CSphString & sError )
 	return true;
 }
 
-
 void CSphSource_Document::BuildHits ( BYTE ** dFields, int iFieldIndex, int iStartPos )
 {
 	bool bGlobalPartialMatch = m_iMinPrefixLen > 0 || m_iMinInfixLen > 0;
@@ -14824,7 +14833,7 @@ void CSphSource_Document::BuildHits ( BYTE ** dFields, int iFieldIndex, int iSta
 	for ( int iField=iStartField; iField<iEndField; iField++ )
 	{
 		BYTE * sField = dFields[iField-iStartField];
-		if ( !sField )
+		if ( !sField || !(*sField) )
 			continue;
 
 		if ( m_bStripHTML )
@@ -14871,14 +14880,7 @@ void CSphSource_Document::BuildHits ( BYTE ** dFields, int iFieldIndex, int iSta
 					sBuf [0]			= MAGIC_WORD_HEAD_NONSTEMMED;
 					sBuf [iBytes + 1]	= '\0';
 
-					SphWordID_t iWord = m_pDict->GetWordIDNonStemmed ( sBuf );
-					if ( iWord )
-					{
-						CSphWordHit & tHit = m_dHits.Add ();
-						tHit.m_iDocID = m_tDocInfo.m_iDocID;
-						tHit.m_iWordID = iWord;
-						tHit.m_iWordPos = iPos;
-					}
+					AddHitFor ( m_pDict->GetWordIDNonStemmed ( sBuf ), iPos );
 				}
 
 				memcpy ( sBuf + 1, sWord, iBytes );
@@ -14888,12 +14890,8 @@ void CSphSource_Document::BuildHits ( BYTE ** dFields, int iFieldIndex, int iSta
 				// stemmed word w/markers
 				SphWordID_t iWord = m_pDict->GetWordIDWithMarkers ( sBuf );
 				if ( iWord )
-				{
-					CSphWordHit & tHit = m_dHits.Add ();
-					tHit.m_iDocID = m_tDocInfo.m_iDocID;
-					tHit.m_iWordID = iWord;
-					tHit.m_iWordPos = iPos;
-				} else
+					AddHitFor ( iWord, iPos );
+				else
 				{
 					iLastStep = m_iStopwordStep;
 					continue;
@@ -14905,16 +14903,7 @@ void CSphSource_Document::BuildHits ( BYTE ** dFields, int iFieldIndex, int iSta
 
 				// stemmed word w/o markers
 				if ( strcmp ( (const char *)sBuf + 1, (const char *)sWord ) )
-				{
-					SphWordID_t iWord = m_pDict->GetWordID ( sBuf + 1, iStemmedLen - 2, true );
-					if ( iWord )
-					{
-						CSphWordHit & tHit = m_dHits.Add ();
-						tHit.m_iDocID = m_tDocInfo.m_iDocID;
-						tHit.m_iWordID = iWord;
-						tHit.m_iWordPos = iPos;
-					}
-				}
+					AddHitFor ( m_pDict->GetWordID ( sBuf + 1, iStemmedLen - 2, true ), iPos );
 
 				// restore word
 				memcpy ( sBuf + 1, sWord, iBytes );
@@ -14925,14 +14914,7 @@ void CSphSource_Document::BuildHits ( BYTE ** dFields, int iFieldIndex, int iSta
 				if ( iMinInfixLen > iLen )
 				{
 					// index full word
-					SphWordID_t iWord = m_pDict->GetWordID ( sWord );
-					if ( iWord )
-					{
-						CSphWordHit & tHit = m_dHits.Add ();
-						tHit.m_iDocID = m_tDocInfo.m_iDocID;
-						tHit.m_iWordID = iWord;
-						tHit.m_iWordPos = iPos;
-					}
+					AddHitFor ( m_pDict->GetWordID ( sWord ), iPos );
 					continue;
 				}
 
@@ -14949,41 +14931,15 @@ void CSphSource_Document::BuildHits ( BYTE ** dFields, int iFieldIndex, int iSta
 
 					for ( int i=iMinInfixLen; i<=iLen-iStart; i++ )
 					{
-						SphWordID_t iWord = m_pDict->GetWordID ( sInfix, sInfixEnd-sInfix, false );
-
-						if ( iWord )
-						{
-							CSphWordHit & tHit = m_dHits.Add ();
-							tHit.m_iDocID = m_tDocInfo.m_iDocID;
-							tHit.m_iWordID = iWord;
-							tHit.m_iWordPos = iPos;
-						}
+						AddHitFor ( m_pDict->GetWordID ( sInfix, sInfixEnd-sInfix, false ), iPos );
 
 						// word start: add magic head
 						if ( bInfixMode && iStart==0 )
-						{
-							iWord = m_pDict->GetWordID ( sInfix - 1, sInfixEnd-sInfix + 1, false );
-							if ( iWord )
-							{
-								CSphWordHit & tHit = m_dHits.Add ();
-								tHit.m_iDocID = m_tDocInfo.m_iDocID;
-								tHit.m_iWordID = iWord;
-								tHit.m_iWordPos = iPos;
-							}
-						}
+							AddHitFor ( m_pDict->GetWordID ( sInfix - 1, sInfixEnd-sInfix + 1, false ), iPos );
 
 						// word end: add magic tail
 						if ( bInfixMode && i==iLen-iStart )
-						{
-							iWord = m_pDict->GetWordID ( sInfix, sInfixEnd-sInfix+1, false );
-							if ( iWord )
-							{
-								CSphWordHit & tHit = m_dHits.Add ();
-								tHit.m_iDocID = m_tDocInfo.m_iDocID;
-								tHit.m_iWordID = iWord;
-								tHit.m_iWordPos = iPos;
-							}
-						}
+							AddHitFor ( m_pDict->GetWordID ( sInfix, sInfixEnd-sInfix+1, false ), iPos );
 
 						sInfixEnd += m_pTokenizer->GetCodepointLength ( *sInfixEnd );
 					}
@@ -15019,14 +14975,7 @@ void CSphSource_Document::BuildHits ( BYTE ** dFields, int iFieldIndex, int iSta
 					sBuf [0]			= MAGIC_WORD_HEAD;
 					sBuf [iBytes + 1]	= '\0';
 
-					SphWordID_t iWord = m_pDict->GetWordIDWithMarkers ( sBuf );
-					if ( iWord )
-					{
-						CSphWordHit & tHit = m_dHits.Add ();
-						tHit.m_iDocID = m_tDocInfo.m_iDocID;
-						tHit.m_iWordID = iWord;
-						tHit.m_iWordPos = iPos;
-					}
+					AddHitFor ( m_pDict->GetWordIDWithMarkers ( sBuf ), iPos );
 				}
 
 				if ( m_bIndexExactWords )
@@ -15036,24 +14985,13 @@ void CSphSource_Document::BuildHits ( BYTE ** dFields, int iFieldIndex, int iSta
 					sBuf [0]			= MAGIC_WORD_HEAD_NONSTEMMED;
 					sBuf [iBytes + 1]	= '\0';
 
-					SphWordID_t iWord = m_pDict->GetWordIDNonStemmed ( sBuf );
-					if ( iWord )
-					{
-						CSphWordHit & tHit = m_dHits.Add ();
-						tHit.m_iDocID = m_tDocInfo.m_iDocID;
-						tHit.m_iWordID = iWord;
-						tHit.m_iWordPos = iPos;
-					}
+					AddHitFor ( m_pDict->GetWordIDNonStemmed ( sBuf ), iPos );
 				}
 
 				SphWordID_t iWord = m_pDict->GetWordID ( sWord );
 				if ( iWord )
 				{
-					CSphWordHit & tHit = m_dHits.Add ();
-					tHit.m_iDocID = m_tDocInfo.m_iDocID;
-					tHit.m_iWordID = iWord;
-					tHit.m_iWordPos = iPos;
-
+					AddHitFor ( iWord, iPos );
 					iLastStep = m_pTokenizer->TokenIsBlended() ? 0 : 1;
 				}
 				else
@@ -16594,14 +16532,7 @@ bool CSphSource_XMLPipe::IterateHitsNext ( CSphString & sError )
 		m_pTokenizer->SetBuffer ( (BYTE*)sTitle, iLen );
 		while ( ( sWord = m_pTokenizer->GetToken() )!=NULL )
 		{
-			SphWordID_t iWID = m_pDict->GetWordID ( sWord );
-			if ( iWID )
-			{
-				CSphWordHit & tHit = m_dHits.Add ();
-				tHit.m_iDocID = m_tDocInfo.m_iDocID;
-				tHit.m_iWordID = iWID;
-				tHit.m_iWordPos = iPos;
-			}
+			AddHitFor ( m_pDict->GetWordID ( sWord ), iPos );
 			iPos++;
 		}
 	}
@@ -16665,17 +16596,7 @@ bool CSphSource_XMLPipe::IterateHitsNext ( CSphString & sError )
 	// tokenize
 	BYTE * sWord;
 	while ( ( sWord = m_pTokenizer->GetToken () )!=NULL )
-	{
-		SphWordID_t iWID = m_pDict->GetWordID ( sWord );
-		++m_iWordPos;
-		if ( iWID )
-		{
-			CSphWordHit & tHit = m_dHits.Add ();
-			tHit.m_iDocID = m_tDocInfo.m_iDocID;
-			tHit.m_iWordID = iWID;
-			tHit.m_iWordPos = HIT_PACK(1,m_iWordPos); // field_id, word_pos
-		}
-	}
+		AddHitFor ( m_pDict->GetWordID ( sWord ), HIT_PACK ( 1, ++m_iWordPos ) );
 
 	m_pBuffer = p;
 
