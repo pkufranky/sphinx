@@ -4864,13 +4864,27 @@ void SqlUnescape ( CSphString & sRes, const char * sEscaped, int iLen )
 
 // unused parameter, simply to avoid type clash between all my yylex() functions
 #define YYLEX_PARAM pParser->m_pScanner, pParser
+#ifdef NDEBUG
 #define YY_DECL int yylex ( YYSTYPE * lvalp, void * yyscanner, SqlParser_t * pParser )
+#else
+#define YY_DECL int yylexd ( YYSTYPE * lvalp, void * yyscanner, SqlParser_t * pParser )
+#endif
+
 #include "llsphinxql.c"
 
 void yyerror ( SqlParser_t * pParser, const char * sMessage )
 {
 	pParser->m_pParseError->SetSprintf ( "%s near '%s'", sMessage, pParser->m_pLastTokenStart ? pParser->m_pLastTokenStart : "(null)" );
 }
+
+#ifndef NDEBUG
+// using a proxy to be possible to debug inside yylex
+int yylex ( YYSTYPE * lvalp, void * yyscanner, SqlParser_t * pParser )
+{
+	int res = yylexd ( lvalp, yyscanner, pParser );
+	return res;
+}
+#endif
 
 #include "yysphinxql.c"
 
