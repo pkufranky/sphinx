@@ -399,22 +399,37 @@ show_meta:
 //////////////////////////////////////////////////////////////////////////
 
 insert_or_replace_tok:
-	TOK_INSERT					{ $$ = $1; $$.m_eStmt = STMT_INSERT; }
+	TOK_INSERT				{ $$ = $1; $$.m_eStmt = STMT_INSERT; }
 	| TOK_REPLACE				{ $$ = $1; $$.m_eStmt = STMT_REPLACE; }
 	;
 
 insert_into:
-	insert_or_replace_tok TOK_INTO TOK_IDENT opt_insert_cols_list TOK_VALUES '(' TOK_CONST_INT ',' insert_vals_list ')'
+	insert_or_replace_tok TOK_INTO TOK_IDENT opt_insert_cols_list TOK_VALUES opt_insert_cols_set
 		{
 			pParser->m_pStmt->m_eStmt = $$.m_eStmt;
 			pParser->m_pStmt->m_sInsertIndex = $3.m_sValue;
-			pParser->m_pStmt->m_tInsertDocinfo.m_iDocID = $7.m_iValue;
 		}
 	;
 
 opt_insert_cols_list:
 	// empty
-	| '(' ident_list ')'
+	| '(' schema_list ')'
+	;
+
+schema_list:
+	TOK_IDENT					{ if ( !pParser->AddSchemaItem ( &$1 ) ) { yyerror ( pParser, "unknown field" ); YYERROR; } }
+	| TOK_ID					{ if ( !pParser->AddSchemaItem ( &$1 ) ) { yyerror ( pParser, "unknown field" ); YYERROR; } }
+	| schema_list ',' TOK_IDENT			{ if ( !pParser->AddSchemaItem ( &$3 ) ) { yyerror ( pParser, "unknown field" ); YYERROR; } }
+	| schema_list ',' TOK_ID			{ if ( !pParser->AddSchemaItem ( &$3 ) ) { yyerror ( pParser, "unknown field" ); YYERROR; } }
+	;
+
+opt_insert_cols_set:
+	opt_insert_cols
+	| opt_insert_cols_set ',' opt_insert_cols
+	;
+
+opt_insert_cols:
+	'(' insert_vals_list ')'			{ if ( !pParser->m_pStmt->CheckInsertIntegrity() ) { yyerror ( pParser, "wrong number of values here" ); YYERROR; } }
 	;
 
 insert_vals_list:
