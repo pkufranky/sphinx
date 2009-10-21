@@ -780,10 +780,11 @@ bool RtIndex_t::AddDocument ( int iFields, const char ** ppFields, const CSphMat
 	{
 		m_tRwlock.ReadLock ();
 		ARRAY_FOREACH ( i, m_pSegments )
-			if ( FindDocinfo ( m_pSegments[i], tDoc.m_iDocID ) )
+			if ( FindDocinfo ( m_pSegments[i], tDoc.m_iDocID )
+				&& !m_pSegments[i]->m_dKlist.BinarySearch ( tDoc.m_iDocID ) )
 		{
 			m_tRwlock.Unlock ();
-			return false; // already exists; INSERT fails
+			return false; // already exists and not deleted; INSERT fails
 		}
 		m_tRwlock.Unlock ();
 	}
