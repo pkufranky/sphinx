@@ -661,7 +661,7 @@ int ExprParser_t::GetToken ( YYSTYPE * lvalp )
 			// special case for float values without leading zero
 		case '.':
 			char * pEnd = NULL;
-			lvalp->fConst = static_cast<float> strtod ( m_pCur, &pEnd );
+			lvalp->fConst = static_cast<float> ( strtod ( m_pCur, &pEnd ) );
 			if ( pEnd )
 			{
 				m_pCur = pEnd;
