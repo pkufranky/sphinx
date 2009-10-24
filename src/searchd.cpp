@@ -183,7 +183,7 @@ enum Mpm_e
 static Mpm_e			g_eWorkers			= USE_WINDOWS ? MPM_NONE : MPM_FORK;
 
 static int				g_iPreforkChildren	= 10;		// how much workers to keep
-static CSphVector<int>	g_dPreforked;
+static CSphVector<int>	g_dChildren;
 static volatile bool	g_bAcceptUnlocked	= true;		// whether this preforked child is guaranteed to be *not* holding a lock around accept
 static int				g_iClientFD			= -1;
 
@@ -195,7 +195,7 @@ struct ThdDesc_t
 	CSphString		m_sClientName;
 };
 
-static CSphMutex				g_tThdMutex;
+static CSphStaticMutex				g_tThdMutex;
 static CSphVector<ThdDesc_t*>	g_dThd;			///< existing threads tables
 
 //////////////////////////////////////////////////////////////////////////
@@ -1433,7 +1433,7 @@ int sphSockRead ( int iSock, void * buf, int iLen, int iReadTimeout )
 		if ( iRes==-1 )
 		{
 			iErr = sphSockGetErrno();
-			if ( iErr==EINTR )
+			if ( iErr==EINTR && !g_bGotSigterm )
 				continue;
 
 			sphSockSetErrno ( iErr );
@@ -1962,6 +1962,8 @@ bool NetInputBuffer_c::ReadFrom ( int iLen, int iTimeout )
 
 	m_pCur = m_pBuf = pBuf;
 	int iGot = sphSockRead ( m_iSock, pBuf, iLen, iTimeout );
+	if ( g_bGotSigterm )
+		return false;
 
 	m_bError = ( iGot!=iLen );
 	m_iLen = m_bError ? 0 : iLen;
@@ -4797,6 +4799,7 @@ struct SqlNode_t
 };
 #define YYSTYPE SqlNode_t
 
+
 /// parsing result
 struct SqlStmt_t
 {
@@ -4808,7 +4811,7 @@ struct SqlStmt_t
 
 	// INSERT specific
 	CSphString				m_sInsertIndex;
-	CSphVector<SqlInsert_t>	m_dInsertValues;;
+	CSphVector<SqlInsert_t>	m_dInsertValues;
 	CSphVector<CSphString>	m_dInsertSchema;
 	int						m_iSchemaSz;
 
@@ -4816,6 +4819,10 @@ struct SqlStmt_t
 	CSphString				m_sDeleteIndex;
 	SphDocID_t				m_iDeleteID;
 
+	SqlStmt_t()
+		: m_iRowsAffected(0)
+		, m_iSchemaSz(0)
+		{};
 	bool AddSchemaItem ( const char* psName )
 	{
 		m_dInsertSchema.Add ( psName );
@@ -4836,6 +4843,7 @@ struct SqlStmt_t
 	}
 };
 
+
 struct SqlParser_t
 {
 	void *			m_pScanner;
@@ -4845,6 +4853,7 @@ struct SqlParser_t
 	CSphQuery *		m_pQuery;
 	bool			m_bGotQuery;
 	SqlStmt_t *		m_pStmt;
+
 	bool			AddOption ( SqlNode_t tIdent, SqlNode_t tValue );
 	void			AddItem ( YYSTYPE * pExpr, YYSTYPE * pAlias, ESphAggrFunc eFunc=SPH_AGGR_NONE );
 	bool			AddSchemaItem ( YYSTYPE * pNode );
@@ -4888,7 +4897,6 @@ void SqlUnescape ( CSphString & sRes, const char * sEscaped, int iLen )
 #else
 #define YY_DECL int yylexd ( YYSTYPE * lvalp, void * yyscanner, SqlParser_t * pParser )
 #endif
-
 #include "llsphinxql.c"
 
 void yyerror ( SqlParser_t * pParser, const char * sMessage )
@@ -5022,7 +5030,6 @@ bool SqlParser_t::AddOption ( SqlNode_t tIdent, SqlNode_t tValue )
 
 	return true;
 }
-
 
 void SqlParser_t::AddItem ( YYSTYPE * pExpr, YYSTYPE * pAlias, ESphAggrFunc eFunc )
 {
@@ -6012,8 +6019,6 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 		SearchHandler_c tHandler ( 1 );
 		SqlStmt_t tStmt;
 		tStmt.m_pQuery = &tHandler.m_dQueries[0];
-		tStmt.m_iSchemaSz = 0;
-		tStmt.m_iRowsAffected = 0;
 		SqlStmt_e eStmt = ParseSqlQuery ( sQuery, &tStmt, sError );
 
 		// handle SQL query
@@ -6287,7 +6292,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 				SendMysqlErrorPacket ( tOut, uPacketID, sError.cstr() );
 				continue;
 			}
-			
+
 			if ( iGot % iExp != 0)
 			{
 				sError.SetSprintf ( "column count does not match value count (expected x%d, got %d)", iExp, iGot );
@@ -6394,8 +6399,8 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 						}
 
 						// FIXME? index schema is lawfully static, but our temp match obviously needs to be dynamic
-						
-						
+
+
 						bResult = tDoc.SetAttr ( tLoc, tVal, tCol.m_eAttrType );
 
 					}
@@ -6425,7 +6430,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 					}
 				}
 
-				
+
 
 				// do add
 				if ( !pIndex->AddDocument ( dFields.GetLength(), dFields.Begin(), tDoc, eStmt==STMT_REPLACE ) )
@@ -6472,6 +6477,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 
 			tOut.SendBytes ( sOK, sizeof(sOK)-1 ); // FIXME? affected rows
 			continue;
+
 		}
 		default:
 		{
@@ -6479,7 +6485,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 			SendMysqlErrorPacket ( tOut, uPacketID, sError.cstr() );
 		}
 		} // switch
-	} // for (;;)
+	} // for ( ;; )
 
 	SafeClose ( iPipeFD );
 }
@@ -6748,7 +6754,8 @@ int CreatePipe ( bool bFatal, int iHandler )
 int PipeAndFork ( bool bFatal, int iHandler )
 {
 	int iChildPipe = CreatePipe ( bFatal, iHandler );
-	switch ( fork() )
+	int iRes = fork();
+	switch ( iRes )
 	{
 		// fork() failed
 		case -1:
@@ -6766,6 +6773,7 @@ int PipeAndFork ( bool bFatal, int iHandler )
 		default:
 			g_iChildren++;
 			SafeClose ( iChildPipe );
+			g_dChildren.Add ( iRes );
 			break;
 	}
 	return iChildPipe;
@@ -7730,8 +7738,8 @@ void CheckRotate ()
 
 #if !USE_WINDOWS
 		if ( g_eWorkers==MPM_PREFORK )
-			ARRAY_FOREACH ( i, g_dPreforked )
-				kill ( g_dPreforked[i], SIGTERM );
+			ARRAY_FOREACH ( i, g_dChildren )
+				kill ( g_dChildren[i], SIGTERM );
 #endif
 
 		g_bDoRotate = false;
@@ -8133,7 +8141,7 @@ int PreforkChild ()
 
 	// parent process
 	g_iChildren++;
-	g_dPreforked.Add ( iRes );
+	g_dChildren.Add ( iRes );
 	return iRes;
 }
 #endif // !USE_WINDOWS
@@ -8164,8 +8172,8 @@ void CheckSignals ()
 
 #if !USE_WINDOWS
 		// in preforked mode, explicitly kill all children
-		ARRAY_FOREACH ( i, g_dPreforked )
-			kill ( g_dPreforked[i], SIGTERM );
+		ARRAY_FOREACH ( i, g_dChildren )
+			kill ( g_dChildren[i], SIGTERM );
 #endif
 
 		Shutdown ();
@@ -8183,13 +8191,13 @@ void CheckSignals ()
 				break;
 
 			g_iChildren--;
-			g_dPreforked.RemoveValue ( iChildPid ); // FIXME! OPTIMIZE! can be slow
+			g_dChildren.RemoveValue ( iChildPid ); // FIXME! OPTIMIZE! can be slow
 		}
 		g_bGotSigchld = false;
 
 		// prefork more children, if needed
 		if ( g_eWorkers==MPM_PREFORK )
-			while ( g_dPreforked.GetLength() < g_iPreforkChildren )
+			while ( g_dChildren.GetLength() < g_iPreforkChildren )
 				if ( PreforkChild()==0 ) // child process? break from here, go work
 					return;
 	}
@@ -9306,7 +9314,7 @@ int WINAPI ServiceMain ( int argc, char **argv )
 		if ( !pAcceptMutex )
 			sphFatal ( "failed to create process-shared mutex" );
 
-		while ( g_dPreforked.GetLength() < g_iPreforkChildren )
+		while ( g_dChildren.GetLength() < g_iPreforkChildren )
 			if ( PreforkChild()==0 ) // child process? break from here, go work
 				break;
 	}

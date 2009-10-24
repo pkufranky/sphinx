@@ -657,7 +657,7 @@ int ExprParser_t::GetToken ( YYSTYPE * lvalp )
 			m_pCur++;
 			if ( *m_pCur=='=' ) m_pCur++;
 			return TOK_EQ;
-
+			
 			// special case for float values without leading zero
 		case '.':
 			char * pEnd = NULL;

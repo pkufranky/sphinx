@@ -2827,14 +2827,6 @@ static BYTE * sphTrim ( BYTE * s )
 }
 
 
-struct IdentityHash_fn
-{
-	static inline uint64_t	Hash ( uint64_t iValue )	{ return iValue; }
-	static inline DWORD		Hash ( DWORD iValue )		{ return iValue; }
-	static inline int		Hash ( int iValue )			{ return iValue; }
-};
-
-
 void ISphTokenizer::Setup ( const CSphTokenizerSettings & tSettings )
 {
 	m_tSettings = tSettings;
@@ -14779,12 +14771,11 @@ void CSphSource::AddHitFor ( SphWordID_t iWordID, DWORD iWordPos )
 {
 	if ( !iWordID )
 		return;
-	CSphWordHit & tHit = m_dHits.Add ();
+	CSphWordHit & tHit = m_dHits.Add();
 	tHit.m_iDocID = m_tDocInfo.m_iDocID;
 	tHit.m_iWordID = iWordID;
 	tHit.m_iWordPos = iWordPos;
 }
-
 
 bool CSphSource::IterateJoinedHits ( CSphString & )
 {
@@ -14814,6 +14805,7 @@ bool CSphSource_Document::IterateHitsNext ( CSphString & sError )
 	BuildHits ( dFields, -1, 0 );
 	return true;
 }
+
 
 void CSphSource_Document::BuildHits ( BYTE ** dFields, int iFieldIndex, int iStartPos )
 {
@@ -14879,7 +14871,6 @@ void CSphSource_Document::BuildHits ( BYTE ** dFields, int iFieldIndex, int iSta
 					memcpy ( sBuf + 1, sWord, iBytes );
 					sBuf [0]			= MAGIC_WORD_HEAD_NONSTEMMED;
 					sBuf [iBytes + 1]	= '\0';
-
 					AddHitFor ( m_pDict->GetWordIDNonStemmed ( sBuf ), iPos );
 				}
 
@@ -14974,7 +14965,6 @@ void CSphSource_Document::BuildHits ( BYTE ** dFields, int iFieldIndex, int iSta
 					memcpy ( sBuf + 1, sWord, iBytes );
 					sBuf [0]			= MAGIC_WORD_HEAD;
 					sBuf [iBytes + 1]	= '\0';
-
 					AddHitFor ( m_pDict->GetWordIDWithMarkers ( sBuf ), iPos );
 				}
 
@@ -14984,7 +14974,6 @@ void CSphSource_Document::BuildHits ( BYTE ** dFields, int iFieldIndex, int iSta
 					memcpy ( sBuf + 1, sWord, iBytes );
 					sBuf [0]			= MAGIC_WORD_HEAD_NONSTEMMED;
 					sBuf [iBytes + 1]	= '\0';
-
 					AddHitFor ( m_pDict->GetWordIDNonStemmed ( sBuf ), iPos );
 				}
 

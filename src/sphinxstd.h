@@ -1081,6 +1081,13 @@ private:
 	mutable HashEntry_t *	m_pIterator;
 };
 
+/// very popular and so, moved here
+struct IdentityHash_fn
+{
+	template <typename INT>
+	static inline INT Hash ( INT iValue )	{ return iValue; }
+};
+
 /////////////////////////////////////////////////////////////////////////////
 
 /// immutable C string proxy

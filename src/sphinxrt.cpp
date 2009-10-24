@@ -129,6 +129,109 @@ struct RtWordCheckpoint_t
 	int							m_iOffset;
 };
 
+class RtDiskKlist_t : public ISphNoncopyable
+{
+private:
+	static const DWORD				MAX_SMALL_SIZE = 512;
+	CSphVector < SphAttr_t >		m_dLargeKlist;
+	CSphOrderedHash < bool, SphDocID_t, IdentityHash_fn, MAX_SMALL_SIZE, 11 >	m_hSmallKlist;
+	mutable CSphRwlock				m_tRwLargelock;
+	mutable CSphRwlock				m_tRwSmalllock;
+
+public:
+	RtDiskKlist_t() { m_tRwLargelock.Init(); m_tRwSmalllock.Init(); }
+	virtual ~RtDiskKlist_t() { m_tRwLargelock.Done(); m_tRwSmalllock.Done(); }
+	void Flush();
+	void LoadFromFile ( const char * sFilename );
+	void SaveToFile ( const char * sFilename );
+	inline void Delete ( SphDocID_t uDoc )
+	{
+		m_tRwSmalllock.WriteLock();
+		if ( !m_hSmallKlist.Exists ( uDoc ) )
+			m_hSmallKlist.Add ( true, uDoc );
+		if ( m_hSmallKlist.GetLength() >= MAX_SMALL_SIZE )
+			Flush();
+		m_tRwSmalllock.Unlock();
+	}
+	inline const SphAttr_t * GetKillList () const { return & m_dLargeKlist[0]; }
+	inline int	GetKillListSize () const { return m_dLargeKlist.GetLength(); }
+	inline bool KillListLock() const { return m_tRwLargelock.ReadLock(); }
+	inline bool KillListUnlock() const { return m_tRwLargelock.Unlock(); }
+};
+
+void RtDiskKlist_t::Flush()
+{
+	if ( m_hSmallKlist.GetLength()==0 )
+		return;
+
+	m_tRwSmalllock.WriteLock();
+	m_tRwLargelock.WriteLock();
+	m_hSmallKlist.IterateStart();
+	int iLastLarge = m_dLargeKlist.GetLength()-1;
+	while ( m_hSmallKlist.IterateNext() )
+	{
+		SphAttr_t uDoc = m_hSmallKlist.IterateGetKey();
+		if ( !sphBinarySearch ( &m_dLargeKlist[0], &m_dLargeKlist[0] + iLastLarge, uDoc ) )
+			m_dLargeKlist.Add ( uDoc );
+	}
+	m_dLargeKlist.Sort();
+	m_hSmallKlist.Reset();
+	m_tRwLargelock.Unlock();
+	m_tRwSmalllock.Unlock();
+}
+
+void RtDiskKlist_t::LoadFromFile ( const char * sFilename )
+{
+	m_tRwLargelock.WriteLock();
+	m_tRwSmalllock.WriteLock();
+	m_hSmallKlist.Reset();
+	m_tRwSmalllock.Unlock();
+	
+	m_dLargeKlist.Reset();
+	CSphString sName, sError;
+	sName.SetSprintf ( "%s.kill", sFilename );
+	if ( !sphIsReadable ( sName.cstr(), &sError ) )
+	{
+		m_tRwLargelock.Unlock();
+		return;
+	}
+
+	CSphAutoreader rdKlist;
+	if ( !rdKlist.Open ( sName, sError ) )
+	{
+		m_tRwLargelock.Unlock();
+		return;
+	}
+
+	m_dLargeKlist.Resize ( rdKlist.GetDword() );
+	SphDocID_t uLastDocID = 0;
+	ARRAY_FOREACH ( i, m_dLargeKlist )
+	{
+		uLastDocID += ( SphDocID_t ) rdKlist.UnzipOffset();
+		m_dLargeKlist[i] = uLastDocID;
+	};
+	m_tRwLargelock.Unlock();
+}
+
+void RtDiskKlist_t::SaveToFile ( const char * sFilename )
+{
+	m_tRwLargelock.ReadLock();
+	Flush();
+	CSphWriter wrKlist;
+	CSphString sName, sError;
+	sName.SetSprintf ( "%s.kill", sFilename );
+	wrKlist.OpenFile ( sName.cstr(), sError );
+
+	wrKlist.PutDword ( m_dLargeKlist.GetLength() );
+	SphDocID_t uLastDocID = 0;
+	ARRAY_FOREACH ( i, m_dLargeKlist )
+	{
+		wrKlist.ZipOffset ( m_dLargeKlist[i] - uLastDocID );
+		uLastDocID = ( SphDocID_t ) m_dLargeKlist[i];
+	};
+	m_tRwLargelock.Unlock();
+	wrKlist.CloseFile ();
+}
 
 struct RtSegment_t
 {
@@ -136,7 +239,7 @@ protected:
 	static const int			KLIST_ACCUM_THRESH	= 32;
 
 public:
-	static CSphMutex			m_tSegmentSeq;
+	static CSphStaticMutex		m_tSegmentSeq;
 	static int					m_iSegments;	///< age tag sequence generator
 	int							m_iTag;			///< segment age tag
 
@@ -193,7 +296,7 @@ public:
 };
 
 int RtSegment_t::m_iSegments = 0;
-CSphMutex RtSegment_t::m_tSegmentSeq;
+CSphStaticMutex RtSegment_t::m_tSegmentSeq;
 
 bool RtSegment_t::HasDocid ( SphDocID_t uDocid ) const
 {
@@ -609,6 +712,7 @@ private:
 	int							m_iDiskChunks;
 	CSphVector<CSphIndex*>		m_pDiskChunks;
 	int							m_iLockFD;
+	mutable RtDiskKlist_t		m_tKlist;
 
 public:
 	explicit					RtIndex_t ( const CSphSchema & tSchema, int64_t iRamSize, const char * sPath );
@@ -632,7 +736,7 @@ private:
 	void						CopyDoc ( RtSegment_t * pSeg, RtDocWriter_t & tOutDoc, RtWord_t * pWord, const RtSegment_t * pSrc, const RtDoc_t * pDoc );
 
 	void						SaveMeta ( int iDiskChunks );
-	void						SaveDiskHeader ( const char * sFilename, int iCheckpoints, SphOffset_t iCheckpointsPosition ) const;
+	void						SaveDiskHeader ( const char * sFilename, int iCheckpoints, SphOffset_t iCheckpointsPosition, DWORD uKillListSize ) const;
 	void						SaveDiskData ( const char * sFilename ) const;
 	void						SaveDiskChunk ();
 	CSphIndex *					LoadDiskChunk ( int iChunk );
@@ -682,10 +786,6 @@ public:
 
 protected:
 	CSphSourceStats				m_tStats;
-
-	// searching-only, per-query
-	int							m_iWeights;						///< search query field weights count
-	int							m_dWeights [ SPH_MAX_FIELDS ];	///< search query field weights
 };
 
 
@@ -1472,9 +1572,10 @@ void RtIndex_t::Commit ()
 	Verify ( m_tWriterMutex.Unlock() );
 }
 
-
 bool RtIndex_t::DeleteDocument ( SphDocID_t uDoc )
 {
+	m_tKlist.Delete(uDoc);
+
 	RtAccum_t * pAcc = AcquireAccum();
 	if ( pAcc )
 		pAcc->m_dAccumKlist.Add ( uDoc );
@@ -1728,11 +1829,21 @@ void RtIndex_t::SaveDiskData ( const char * sFilename ) const
 	wrDummy.PutBytes ( &bDummy, 1 );
 	wrDummy.CloseFile ();
 
-	sName.SetSprintf ( "%s.spk", sFilename ); wrDummy.OpenFile ( sName.cstr(), sError ); wrDummy.CloseFile ();
+	// dump killlist
+	sName.SetSprintf ( "%s.spk", sFilename );
+	wrDummy.OpenFile ( sName.cstr(), sError );
+	m_tKlist.Flush();
+	m_tKlist.KillListLock();
+	DWORD uKlistSize = m_tKlist.GetKillListSize();
+	if ( uKlistSize )
+		wrDummy.PutBytes ( m_tKlist.GetKillList(), uKlistSize*sizeof ( SphAttr_t ) );
+	m_tKlist.KillListUnlock();
+	wrDummy.CloseFile ();
+
 	sName.SetSprintf ( "%s.spm", sFilename ); wrDummy.OpenFile ( sName.cstr(), sError ); wrDummy.CloseFile ();
 
 	// header
-	SaveDiskHeader ( sFilename, dCheckpoints.GetLength(), iCheckpointsPosition );
+	SaveDiskHeader ( sFilename, dCheckpoints.GetLength(), iCheckpointsPosition, uKlistSize );
 
 	// cleanup
 	ARRAY_FOREACH ( i, pWordReaders )
@@ -1778,7 +1889,7 @@ static void WriteSchemaColumn ( CSphWriter & tWriter, const CSphColumnInfo & tCo
 }
 
 
-void RtIndex_t::SaveDiskHeader ( const char * sFilename, int iCheckpoints, SphOffset_t iCheckpointsPosition ) const
+void RtIndex_t::SaveDiskHeader ( const char * sFilename, int iCheckpoints, SphOffset_t iCheckpointsPosition, DWORD uKillListSize ) const
 {
 	static const DWORD INDEX_MAGIC_HEADER	= 0x58485053;	///< my magic 'SPHX' header
 	static const DWORD INDEX_FORMAT_VERSION	= 19;			///< my format version
@@ -1859,7 +1970,7 @@ void RtIndex_t::SaveDiskHeader ( const char * sFilename, int iCheckpoints, SphOf
 	tWriter.PutDword ( tDict.m_iMinStemmingLen );
 
 	// kill-list size
-	tWriter.PutDword ( 0 );
+	tWriter.PutDword ( uKillListSize );
 
 	// done
 	tWriter.CloseFile ();
@@ -1913,6 +2024,7 @@ void RtIndex_t::SaveDiskChunk ()
 	CSphString sNewChunk;
 	sNewChunk.SetSprintf ( "%s.%d", m_sPath.cstr(), m_iDiskChunks );
 	SaveDiskData ( sNewChunk.cstr() );
+
 
 	// bring new disk chunk online
 	CSphIndex * pDiskChunk = LoadDiskChunk ( m_iDiskChunks );
@@ -2046,6 +2158,7 @@ bool RtIndex_t::SaveRamChunk ()
 	CSphString sChunk, sNewChunk;
 	sChunk.SetSprintf ( "%s.ram", m_sPath.cstr() );
 	sNewChunk.SetSprintf ( "%s.ram.new", m_sPath.cstr() );
+	m_tKlist.SaveToFile ( m_sPath.cstr() );
 
 	CSphWriter wrChunk;
 	if ( !wrChunk.OpenFile ( sNewChunk, m_sLastError ) )
@@ -2096,6 +2209,8 @@ bool RtIndex_t::LoadRamChunk ()
 
 	if ( !sphIsReadable ( sChunk.cstr(), &m_sLastError ) )
 		return true;
+
+	m_tKlist.LoadFromFile ( m_sPath.cstr() );
 
 	CSphAutoreader rdChunk;
 	if ( !rdChunk.Open ( sChunk, m_sLastError ) )
@@ -2400,6 +2515,18 @@ const CSphRowitem * RtIndex_t::FindDocinfo ( const RtSegment_t * pSeg, SphDocID_
 	return pFound;
 }
 
+static void AddKillListFilter ( CSphQuery * pQuery, const SphAttr_t * pKillList, int nEntries )
+{
+	assert ( nEntries && pKillList );
+	CSphFilterSettings tFilter;
+	tFilter.m_bExclude = true;
+	tFilter.m_eType = SPH_FILTER_VALUES;
+	tFilter.m_uMinValue = pKillList [0];
+	tFilter.m_uMaxValue = pKillList [nEntries-1];
+	tFilter.m_sAttrName = "@id";
+	tFilter.SetExternalValues ( pKillList, nEntries );
+	pQuery->m_dFilters.Add ( tFilter );
+}
 
 // FIXME! missing MVA, index_exact_words support
 // FIXME? missing enable_star, legacy match modes support
@@ -2425,30 +2552,10 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	pResult->m_iQueryTime = 0;
 	int64_t tmQueryStart = sphMicroTimer();
 
-	//////////////////////
-	// search disk chunks
-	//////////////////////
-
 	// force ext2 mode for them
 	pQuery->m_eMode = SPH_MATCH_EXTENDED2;
-
-	// FIXME! slow disk searches could lock out concurrent writes for too long
-	// FIXME! each result will point to its own MVA and string pools
-	// !COMMIT need to setup disk K-list here
-	ARRAY_FOREACH ( iChunk, m_pDiskChunks )
-	{
-		const CSphIndex * pDiskChunk = m_pDiskChunks[iChunk];
-
-		CSphQueryResult tChunkResult;
-		if ( !pDiskChunk->MultiQuery ( pQuery, &tChunkResult, iSorters, ppSorters ) )
-		{
-			// FIXME? maybe handle this more gracefully (convert to a warning)?
-			pResult->m_sError = tChunkResult.m_sError;
-			m_tRwlock.Unlock ();
-			return false;
-		}
-	}
-
+	
+	m_tRwlock.Unlock ();
 	////////////////////
 	// search RAM chunk
 	////////////////////
@@ -2459,133 +2566,128 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 		pResult->m_pMva = NULL;
 		pResult->m_pStrings = NULL;
 
-		// query timer
-		pResult->m_iQueryTime = int( ( sphMicroTimer()-tmQueryStart )/1000 );
-		m_tRwlock.Unlock ();
-		return true;
-	}
-
-	// setup calculations and result schema
-	CSphQueryContext tCtx;
-	if ( !tCtx.SetupCalc ( pResult, ppSorters[0]->GetSchema(), m_tSchema, NULL ) )
-	{
-		m_tRwlock.Unlock ();
-		return false;
-	}
-
-	// setup search terms
-	RtQwordSetup_t tTermSetup;
-	tTermSetup.m_pDict = m_pDict;
-	tTermSetup.m_pIndex = this;
-	tTermSetup.m_eDocinfo = m_tSettings.m_eDocinfo;
-	tTermSetup.m_iDynamicRowitems = pResult->m_tSchema.GetDynamicSize();
-	if ( pQuery->m_uMaxQueryMsec>0 )
-		tTermSetup.m_iMaxTimer = sphMicroTimer() + pQuery->m_uMaxQueryMsec*1000; // max_query_time
-	tTermSetup.m_pWarning = &pResult->m_sWarning;
-	tTermSetup.m_pSeg = m_pSegments[0];
-	tTermSetup.m_pCtx = &tCtx;
-
-	// bind weights
-	tCtx.BindWeights ( pQuery, m_tSchema );
-
-	// parse query
-	XQQuery_t tParsed;
-	if ( !sphParseExtendedQuery ( tParsed, pQuery->m_sQuery.cstr(), GetTokenizer(), GetSchema(), m_pDict ) )
-	{
-		pResult->m_sError = tParsed.m_sParseError;
-		m_tRwlock.Unlock ();
-		return false;
-	}
-
-	// setup query
-	// must happen before index-level reject, in order to build proper keyword stats
-	CSphScopedPtr<ISphRanker> pRanker ( sphCreateRanker ( tParsed.m_pRoot, pQuery->m_eRanker, pResult, tTermSetup ) );
-	if ( !pRanker.Ptr() )
-	{
-		m_tRwlock.Unlock ();
-		return false;
-	}
-
-	// setup filters
-	if ( !tCtx.CreateFilters ( pQuery, pResult->m_tSchema, NULL, pResult->m_sError ) )
-	{
-		m_tRwlock.Unlock ();
-		return false;
-	}
-
-	// FIXME! OPTIMIZE! check if we can early reject the whole index
-
-	// setup lookup
-	// do pre-filter lookup as needed
-	// do pre-sort lookup in all cases
-	// post-sort lookup is complicated (because of many segments)
-	// pre-sort lookup is cheap now anyway, and almost always anyway
-	// (except maybe by stupid relevance-sorting-only benchmarks!!)
-	tCtx.m_bEarlyLookup = ( pQuery->m_dFilters.GetLength() || tCtx.m_dEarlyCalc.GetLength() );
-	tCtx.m_bLateLookup = true;
-
-	// FIXME! setup sorters vs. MVA
-	for ( int i=0; i<iSorters; i++ )
-		(ppSorters[i])->SetMVAPool ( NULL );
-
-	// FIXME! setup overrides
-
-	// do searching
-	if ( pQuery->m_eMode==SPH_MATCH_FULLSCAN || pQuery->m_sQuery.IsEmpty() )
-	{
-		// full scan
-		// FIXME? OPTIMIZE? add shortcuts here too?
-		CSphMatch tMatch;
-		tMatch.Reset ( pResult->m_tSchema.GetDynamicSize() );
-		tMatch.m_iWeight = 1;
-
-		ARRAY_FOREACH ( iSeg, m_pSegments )
+		// setup calculations and result schema
+		CSphQueryContext tCtx;
+		if ( !tCtx.SetupCalc ( pResult, ppSorters[0]->GetSchema(), m_tSchema, NULL ) )
 		{
-			RtRowIterator_t tIt ( m_pSegments[iSeg], m_iStride, false );
-			for ( ;; )
-			{
-				const CSphRowitem * pRow = tIt.GetNextAliveRow();
-				if ( !pRow )
-					break;
-
-				tMatch.m_iDocID = DOCINFO2ID(pRow);
-				tMatch.m_pStatic = DOCINFO2ATTRS(pRow); // FIXME! overrides
-
-				tCtx.EarlyCalc ( tMatch );
-				if ( tCtx.m_pFilter && !tCtx.m_pFilter->Eval ( tMatch ) )
-					continue;
-
-				tCtx.LateCalc ( tMatch );
-				for ( int iSorter=0; iSorter<iSorters; iSorter++ )
-					ppSorters[iSorter]->Push ( tMatch );
-			}
+			m_tRwlock.Unlock ();
+			return false;
 		}
 
-	} else
-	{
-		// query matching
-		ARRAY_FOREACH ( iSeg, m_pSegments )
+		// setup search terms
+		RtQwordSetup_t tTermSetup;
+		tTermSetup.m_pDict = m_pDict;
+		tTermSetup.m_pIndex = this;
+		tTermSetup.m_eDocinfo = m_tSettings.m_eDocinfo;
+		tTermSetup.m_iDynamicRowitems = pResult->m_tSchema.GetDynamicSize();
+		if ( pQuery->m_uMaxQueryMsec>0 )
+			tTermSetup.m_iMaxTimer = sphMicroTimer() + pQuery->m_uMaxQueryMsec*1000; // max_query_time
+		tTermSetup.m_pWarning = &pResult->m_sWarning;
+		tTermSetup.m_pSeg = m_pSegments[0];
+		tTermSetup.m_pCtx = &tCtx;
+
+		// bind weights
+		tCtx.BindWeights ( pQuery, m_tSchema );
+
+		// parse query
+		XQQuery_t tParsed;
+		if ( !sphParseExtendedQuery ( tParsed, pQuery->m_sQuery.cstr(), GetTokenizer(), GetSchema(), m_pDict ) )
 		{
-			if ( iSeg!=0 )
+			pResult->m_sError = tParsed.m_sParseError;
+			m_tRwlock.Unlock ();
+			return false;
+		}
+
+		// setup query
+		// must happen before index-level reject, in order to build proper keyword stats
+		CSphScopedPtr<ISphRanker> pRanker ( sphCreateRanker ( tParsed.m_pRoot, pQuery->m_eRanker, pResult, tTermSetup ) );
+		if ( !pRanker.Ptr() )
+		{
+			m_tRwlock.Unlock ();
+			return false;
+		}
+
+		// setup filters
+		if ( !tCtx.CreateFilters ( pQuery, pResult->m_tSchema, NULL, pResult->m_sError ) )
+		{
+			m_tRwlock.Unlock ();
+			return false;
+		}
+
+		// FIXME! OPTIMIZE! check if we can early reject the whole index
+
+		// setup lookup
+		// do pre-filter lookup as needed
+		// do pre-sort lookup in all cases
+		// post-sort lookup is complicated (because of many segments)
+		// pre-sort lookup is cheap now anyway, and almost always anyway
+		// (except maybe by stupid relevance-sorting-only benchmarks!!)
+		tCtx.m_bEarlyLookup = ( pQuery->m_dFilters.GetLength() || tCtx.m_dEarlyCalc.GetLength() );
+		tCtx.m_bLateLookup = true;
+
+		// FIXME! setup sorters vs. MVA
+		for ( int i=0; i<iSorters; i++ )
+			(ppSorters[i])->SetMVAPool ( NULL );
+
+		// FIXME! setup overrides
+
+		// do searching
+		if ( pQuery->m_eMode==SPH_MATCH_FULLSCAN || pQuery->m_sQuery.IsEmpty() )
+		{
+			// full scan
+			// FIXME? OPTIMIZE? add shortcuts here too?
+			CSphMatch tMatch;
+			tMatch.Reset ( pResult->m_tSchema.GetDynamicSize() );
+			tMatch.m_iWeight = 1;
+
+			ARRAY_FOREACH ( iSeg, m_pSegments )
 			{
-				tTermSetup.m_pSeg = m_pSegments[iSeg];
-				pRanker->Reset ( tTermSetup );
+				RtRowIterator_t tIt ( m_pSegments[iSeg], m_iStride, false );
+				for ( ;; )
+				{
+					const CSphRowitem * pRow = tIt.GetNextAliveRow();
+					if ( !pRow )
+						break;
+
+					tMatch.m_iDocID = DOCINFO2ID(pRow);
+					tMatch.m_pStatic = DOCINFO2ATTRS(pRow); // FIXME! overrides
+
+					tCtx.EarlyCalc ( tMatch );
+					if ( tCtx.m_pFilter && !tCtx.m_pFilter->Eval ( tMatch ) )
+						continue;
+
+					tCtx.LateCalc ( tMatch );
+					for ( int iSorter=0; iSorter<iSorters; iSorter++ )
+						ppSorters[iSorter]->Push ( tMatch );
+				}
 			}
 
-			// for lookups to work
-			tCtx.m_pIndexData = m_pSegments[iSeg];
-
-			CSphMatch * pMatch = pRanker->GetMatchesBuffer();
-			for ( ;; )
+		} else
+		{
+			// query matching
+			ARRAY_FOREACH ( iSeg, m_pSegments )
 			{
-				int iMatches = pRanker->GetMatches ( m_iWeights, m_dWeights );
-				if ( iMatches<=0 )
-					break;
-				for ( int i=0; i<iMatches; i++ )
+				if ( iSeg!=0 )
 				{
-					CopyDocinfo ( pMatch[i], FindDocinfo ( m_pSegments[iSeg], pMatch[i].m_iDocID ) );
-					for ( int iSorter=0; iSorter<iSorters; iSorter++ )
-						ppSorters[iSorter]->Push ( pMatch[i] );
+					tTermSetup.m_pSeg = m_pSegments[iSeg];
+					pRanker->Reset ( tTermSetup );
+				}
+
+				// for lookups to work
+				tCtx.m_pIndexData = m_pSegments[iSeg];
+
+				CSphMatch * pMatch = pRanker->GetMatchesBuffer();
+				for ( ;; )
+				{
+					int iMatches = pRanker->GetMatches ( tCtx.m_iWeights, tCtx.m_dWeights );
+					if ( iMatches<=0 )
+						break;
+					for ( int i=0; i<iMatches; i++ )
+					{
+						CopyDocinfo ( pMatch[i], FindDocinfo ( m_pSegments[iSeg], pMatch[i].m_iDocID ) );
+						for ( int iSorter=0; iSorter<iSorters; iSorter++ )
+							ppSorters[iSorter]->Push ( pMatch[i] );
+					}
 				}
 			}
 		}
@@ -2595,8 +2697,54 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	pResult->m_pMva = NULL;
 	pResult->m_pStrings = NULL;
 
+	// FIXME! slow disk searches could lock out concurrent writes for too long
+	// FIXME! each result will point to its own MVA and string pools
+	// !COMMIT need to setup disk K-list here
+
+	//////////////////////
+	// search disk chunks
+	//////////////////////
+
+	bool m_bKlistLocked = false;
+	for ( int iChunk = m_pDiskChunks.GetLength()-1; iChunk>=0; iChunk-- )
+	{
+		const CSphIndex * pDiskChunk = m_pDiskChunks[iChunk];
+
+		if ( iChunk==m_pDiskChunks.GetLength()-1 )
+		{
+			// For the topmost chunk we add the killlist from the ram-index
+			m_tKlist.Flush();
+			m_tKlist.KillListLock();
+			if ( m_tKlist.GetKillListSize() )
+			{
+				// we don't lock in vain...	
+				m_bKlistLocked = true;
+				AddKillListFilter ( pQuery, m_tKlist.GetKillList(), m_tKlist.GetKillListSize() );
+			} else
+			m_tKlist.KillListUnlock();
+		}
+
+		CSphQueryResult tChunkResult;
+		if ( !pDiskChunk->MultiQuery ( pQuery, &tChunkResult, iSorters, ppSorters ) )
+		{
+			// FIXME? maybe handle this more gracefully (convert to a warning)?
+			pResult->m_sError = tChunkResult.m_sError;
+			m_tRwlock.Unlock ();
+			if ( m_bKlistLocked )
+				m_tKlist.KillListUnlock();
+			return false;
+		}
+
+		// add the killlist from the from current chunk into the common filter - to be applied to all chunks in deeper layers.
+		if ( iChunk!=0 && pDiskChunk->GetKillListSize () )
+			AddKillListFilter ( pQuery, pDiskChunk->GetKillList(), pDiskChunk->GetKillListSize() );
+	}
+
+	if ( m_bKlistLocked )
+		m_tKlist.KillListUnlock();
+
 	// query timer
-	pResult->m_iQueryTime = int( ( sphMicroTimer()-tmQueryStart )/1000 );
+	pResult->m_iQueryTime = int ( ( sphMicroTimer()-tmQueryStart )/1000 );
 	m_tRwlock.Unlock ();
 	return true;
 }
