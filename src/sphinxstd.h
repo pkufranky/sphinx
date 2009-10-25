@@ -1621,6 +1621,9 @@ typedef pthread_t SphThread_t;
 typedef pthread_key_t SphThreadKey_t;
 #endif
 
+/// my threading initialize routine
+void * sphThreadInit();
+
 /// my create thread wrapper
 bool sphThreadCreate ( SphThread_t * pThread, void (*fnThread)(void*), void * pArg );
 

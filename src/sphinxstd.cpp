@@ -555,10 +555,8 @@ SPH_THDFUNC sphThreadProcWrapper ( void * pArg )
 	return 0;
 }
 
-
-bool sphThreadCreate ( SphThread_t * pThread, void (*fnThread)(void*), void * pArg )
+void * sphThreadInit()
 {
-	const int THREAD_STACK_SIZE = 65536;
 
 	static bool bInit = false;
 #if !USE_WINDOWS
@@ -572,16 +570,25 @@ bool sphThreadCreate ( SphThread_t * pThread, void (*fnThread)(void*), void * pA
 			sphDie ( "FATAL: sphThreadKeyCreate() failed" );
 
 #if !USE_WINDOWS
+		const int THREAD_STACK_SIZE = 65536;
 		if ( pthread_attr_init ( &tAttr ) )
 			sphDie ( "FATAL: pthread_attr_init() failed" );
 
 		if ( pthread_attr_setstacksize ( &tAttr, PTHREAD_STACK_MIN + THREAD_STACK_SIZE  ) )
 			sphDie ( "FATAL: pthread_attr_setstacksize() failed" );
 #endif
-
 		bInit = true;
 	}
+#if !USE_WINDOWS
+	return &tAttr;
+#else
+	return NULL;
+#endif
+}
 
+bool sphThreadCreate ( SphThread_t * pThread, void (*fnThread)(void*), void * pArg )
+{
+	void * pAttr = sphThreadInit();
 	// we can not merely put this on current stack
 	// as it might get destroyed before wrapper sees it
 	ThreadCall_t * pCall = new ThreadCall_t;
@@ -591,11 +598,12 @@ bool sphThreadCreate ( SphThread_t * pThread, void (*fnThread)(void*), void * pA
 
 	// create thread
 #if USE_WINDOWS
+	const int THREAD_STACK_SIZE = 65536;
 	*pThread = CreateThread ( NULL, THREAD_STACK_SIZE, sphThreadProcWrapper, pCall, 0, NULL );
 	if ( *pThread )
 		return true;
 #else
-	errno = pthread_create ( pThread, &tAttr, sphThreadProcWrapper, pCall );
+	errno = pthread_create ( pThread, ( pthread_attr_t * ) pAttr, sphThreadProcWrapper, pCall );
 	if ( !errno )
 		return true;
 #endif
@@ -772,7 +780,7 @@ bool CSphRwlock::Done ()
 	if ( !CloseHandle ( m_hReadEvent ) )
 		return false;
 	m_hReadEvent = NULL;
-	
+
 	if ( !CloseHandle ( m_hWriteMutex ) )
 		return false;
 	m_hWriteMutex = NULL;

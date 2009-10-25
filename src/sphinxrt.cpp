@@ -2817,6 +2817,7 @@ ISphRtIndex * sphCreateIndexRT ( const CSphSchema & tSchema, DWORD uRamSize, con
 
 void sphRTInit ()
 {
+	sphThreadInit();
 	Verify ( RtSegment_t::m_tSegmentSeq.Init() );
 	Verify ( sphThreadKeyCreate ( &g_tTlsAccumKey ) );
 }
