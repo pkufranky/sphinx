@@ -2560,12 +2560,8 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 	// search RAM chunk
 	////////////////////
 
-	if ( !m_pSegments.GetLength() )
+	if ( m_pSegments.GetLength() )
 	{
-		// FIXME! mva and string pools ptrs
-		pResult->m_pMva = NULL;
-		pResult->m_pStrings = NULL;
-
 		// setup calculations and result schema
 		CSphQueryContext tCtx;
 		if ( !tCtx.SetupCalc ( pResult, ppSorters[0]->GetSchema(), m_tSchema, NULL ) )
