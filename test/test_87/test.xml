@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Test>
+  <Name>Sphinxql: Inserting values with query-defined schema</Name>
+
+<skip_indexer/>
+<Config>
+indexer
+{
+	mem_limit			= 16M
+}
+
+searchd
+{
+<Searchd_Settings/>
+}
+
+<Index_Schema/>
+</Config>
+
+<SPHIndexes>
+<SPHIndex name="test">
+	<rt_attr_int>idd</rt_attr_int>
+	<rt_field>title</rt_field>
+	<rt_field>content</rt_field>
+</SPHIndex>
+</SPHIndexes>
+
+<SPHQueries>
+	<SPHinxQL>insert into test values (1,'title one','content one',3)</SPHinxQL>
+	<SPHinxQL>insert into test (id,content) values (2,'query defined')</SPHinxQL>
+	<SPHinxQL>select * from test where match('content')</SPHinxQL>
+	<SPHinxQL>select * from test where match('query')</SPHinxQL>
+	<SPHinxQL>select * from test</SPHinxQL>
+</SPHQueries>
+
+</Test>
