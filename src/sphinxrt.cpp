@@ -186,7 +186,7 @@ void RtDiskKlist_t::LoadFromFile ( const char * sFilename )
 	m_tRwSmalllock.WriteLock();
 	m_hSmallKlist.Reset();
 	m_tRwSmalllock.Unlock();
-	
+
 	m_dLargeKlist.Reset();
 	CSphString sName, sError;
 	sName.SetSprintf ( "%s.kill", sFilename );
@@ -2554,8 +2554,7 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 
 	// force ext2 mode for them
 	pQuery->m_eMode = SPH_MATCH_EXTENDED2;
-	
-	m_tRwlock.Unlock ();
+
 	////////////////////
 	// search RAM chunk
 	////////////////////
@@ -2713,7 +2712,7 @@ bool RtIndex_t::MultiQuery ( CSphQuery * pQuery, CSphQueryResult * pResult, int 
 			m_tKlist.KillListLock();
 			if ( m_tKlist.GetKillListSize() )
 			{
-				// we don't lock in vain...	
+				// we don't lock in vain...
 				m_bKlistLocked = true;
 				AddKillListFilter ( pQuery, m_tKlist.GetKillList(), m_tKlist.GetKillListSize() );
 			} else
