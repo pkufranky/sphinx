@@ -9,7 +9,10 @@
 
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <io.h>
+
+#if USE_WINDOWS
+#include <io.h> // for open(), close()
+#endif
 
 //////////////////////////////////////////////////////////////////////////
 
