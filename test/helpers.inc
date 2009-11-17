@@ -1119,7 +1119,10 @@ class SphinxConfig
 				}
 
 				// fetch and format fields from db by default
-				$query_res = mysql_query ( "select * from test_table where document_id = $doc_id" );
+				if ( $this->IsNeedDB() )
+					$query_res = mysql_query ( "select * from test_table where document_id = $doc_id" );
+				else
+					$query_res = false;
 				if ( !$query_res )
 					continue;
 
