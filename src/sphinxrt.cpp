@@ -2125,7 +2125,7 @@ const CSphSchema * RtIndex_t::Prealloc ( bool, CSphString & )
 
 	// load ram chunk
 	if ( !LoadRamChunk() )
-		return false;
+		return NULL;
 
 	return &m_tSchema;
 }
