@@ -1528,35 +1528,51 @@ void RtIndex_t::Commit ()
 	// and also swap in new segment list
 	m_tRwlock.WriteLock ();
 
-	int iKilled = 0;
-
-	// update K-lists on survivors
+	// adjust for an incoming accumulator K-list
+	int iTotalKilled = 0;
 	if ( pAcc->m_dAccumKlist.GetLength() )
-		ARRAY_FOREACH ( iSeg, dSegments )
 	{
-		RtSegment_t * pSeg = dSegments[iSeg];
-		if ( !pSeg->m_bTlsKlist )
-			continue; // should be fresh enough
+		pAcc->m_dAccumKlist.Uniq(); // FIXME? can we guarantee this is redundant?
 
-		// this segment was not created by this txn
-		// so we need to merge additional K-list from current txn into it
-		ARRAY_FOREACH ( j, pAcc->m_dAccumKlist )
+		// update totals
+		// work the original (!) segments, and before (!) updating their K-lists
+		ARRAY_FOREACH ( i, pAcc->m_dAccumKlist )
 		{
-			SphDocID_t uDocid = pAcc->m_dAccumKlist[j];
-			if ( pSeg->HasDocid ( uDocid ) )
+			SphDocID_t uDocid = pAcc->m_dAccumKlist[i];
+			ARRAY_FOREACH ( j, m_pSegments )
+				if ( m_pSegments[j]->HasDocid ( uDocid ) && !m_pSegments[j]->m_dKlist.BinarySearch ( uDocid ) )
 			{
-				pSeg->m_dKlist.Add ( uDocid );
-				iKilled++;
-				pSeg->m_iAliveRows--;
+				iTotalKilled++;
+				break;
 			}
 		}
 
-		// we did not check for existence in K-list, only in segment
-		// so need to use Uniq(), not just Sort()
-		pSeg->m_dKlist.Uniq ();
+		// update K-lists on survivors
+		ARRAY_FOREACH ( iSeg, dSegments )
+		{
+			RtSegment_t * pSeg = dSegments[iSeg];
+			if ( !pSeg->m_bTlsKlist )
+				continue; // should be fresh enough
 
-		// mark as good
-		pSeg->m_bTlsKlist = false;
+			// this segment was not created by this txn
+			// so we need to merge additional K-list from current txn into it
+			ARRAY_FOREACH ( j, pAcc->m_dAccumKlist )
+			{
+				SphDocID_t uDocid = pAcc->m_dAccumKlist[j];
+				if ( pSeg->HasDocid ( uDocid ) )
+				{
+					pSeg->m_dKlist.Add ( uDocid );
+					pSeg->m_iAliveRows--;
+				}
+			}
+
+			// we did not check for existence in K-list, only in segment
+			// so need to use Uniq(), not just Sort()
+			pSeg->m_dKlist.Uniq ();
+
+			// mark as good
+			pSeg->m_bTlsKlist = false;
+		}
 	}
 
 	// go live!
@@ -1567,7 +1583,7 @@ void RtIndex_t::Commit ()
 		SafeDelete ( dToKill[i] );
 
 	// update stats
-	m_tStats.m_iTotalDocuments += pAcc->m_iAccumDocs - iKilled;
+	m_tStats.m_iTotalDocuments += pAcc->m_iAccumDocs - iTotalKilled;
 
 	// finish cleaning up and release accumulator
 	pAcc->m_pIndex = NULL;
@@ -2019,6 +2035,8 @@ void RtIndex_t::SaveMeta ( int iDiskChunks )
 	wrMeta.PutDword ( META_HEADER_MAGIC );
 	wrMeta.PutDword ( META_VERSION );
 	wrMeta.PutDword ( iDiskChunks );
+	wrMeta.PutDword ( m_tStats.m_iTotalDocuments );
+	wrMeta.PutOffset ( m_tStats.m_iTotalBytes ); // FIXME? need PutQword ideally
 	wrMeta.CloseFile();
 
 	// rename
@@ -2124,6 +2142,8 @@ const CSphSchema * RtIndex_t::Prealloc ( bool, CSphString & )
 		return NULL;
 	}
 	m_iDiskChunks = rdMeta.GetDword();
+	m_tStats.m_iTotalDocuments = rdMeta.GetDword();
+	m_tStats.m_iTotalBytes = rdMeta.GetOffset();
 
 	// load disk chunks, if any
 	for ( int iChunk=0; iChunk<m_iDiskChunks; iChunk++ )
@@ -2187,12 +2207,14 @@ bool RtIndex_t::SaveRamChunk ()
 		const RtSegment_t * pSeg = m_pSegments[iSeg];
 		wrChunk.PutDword ( pSeg->m_iTag );
 		SaveVector ( wrChunk, pSeg->m_dWords );
+#if COMPRESSED_WORDLIST
 		wrChunk.PutDword ( pSeg->m_dWordCheckpoints.GetLength() );
 		ARRAY_FOREACH ( i, pSeg->m_dWordCheckpoints )
 		{
 			wrChunk.PutOffset ( pSeg->m_dWordCheckpoints[i].m_iOffset );
 			wrChunk.PutOffset ( pSeg->m_dWordCheckpoints[i].m_uWordID );
 		}
+#endif
 		SaveVector ( wrChunk, pSeg->m_dDocs );
 		SaveVector ( wrChunk, pSeg->m_dHits );
 		wrChunk.PutDword ( pSeg->m_iRows );
@@ -2247,12 +2269,14 @@ bool RtIndex_t::LoadRamChunk ()
 
 		pSeg->m_iTag = rdChunk.GetDword ();
 		LoadVector ( rdChunk, pSeg->m_dWords );
+#if COMPRESSED_WORDLIST
 		pSeg->m_dWordCheckpoints.Resize ( rdChunk.GetDword() );
 		ARRAY_FOREACH ( i, pSeg->m_dWordCheckpoints )
 		{
 			pSeg->m_dWordCheckpoints[i].m_iOffset = (int)rdChunk.GetOffset();
 			pSeg->m_dWordCheckpoints[i].m_uWordID = (SphWordID_t)rdChunk.GetOffset();
 		}
+#endif
 		LoadVector ( rdChunk, pSeg->m_dDocs );
 		LoadVector ( rdChunk, pSeg->m_dHits );
 		pSeg->m_iRows = rdChunk.GetDword();
