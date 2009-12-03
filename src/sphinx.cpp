@@ -5072,6 +5072,7 @@ void CSphReader_VLN::GetBytes ( void * pData, int iSize )
 		m_iBuffPos += iLen;
 		pOut += iLen;
 		iSize -= iLen;
+		m_iSizeHint = iSize; // FIXME!
 
 		if ( iSize>0 )
 		{
@@ -5083,6 +5084,7 @@ void CSphReader_VLN::GetBytes ( void * pData, int iSize )
 
 	if ( m_iBuffPos+iSize>m_iBuffUsed )
 	{
+		m_iSizeHint = iSize - m_iBuffUsed + m_iBuffPos; // FIXME!
 		UpdateCache ();
 		if ( m_iBuffPos+iSize>m_iBuffUsed )
 		{

@@ -2189,7 +2189,6 @@ bool RtIndex_t::SaveRamChunk ()
 		wrChunk.PutDword ( pSeg->m_iAliveRows );
 		SaveVector ( wrChunk, pSeg->m_dRows );
 		SaveVector ( wrChunk, pSeg->m_dKlist );
-		wrChunk.PutDword ( pSeg->m_dKlist.GetLength() );
 	}
 
 	wrChunk.CloseFile();

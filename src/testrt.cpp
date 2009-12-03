@@ -11,7 +11,7 @@
 #pragma message("Automatically linking with psapi.lib")
 #endif
 
-const int	COMMIT_STEP = 1000;
+const int	COMMIT_STEP = 1;
 float		g_fTotalMB = 0.0f;
 
 void SetupIndexing ( CSphSource_MySQL * pSrc, const CSphSourceParams_MySQL & tParams )
@@ -161,11 +161,11 @@ int main ()
 
 	ISphTokenizer * pTok = sphCreateUTF8Tokenizer();
 	CSphDict * pDict = sphCreateDictionaryCRC ( tDictSettings, pTok, sError );
-	CSphSource * pSrc = SpawnSource ( "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM posting WHERE id<=100000 AND id%2=0", pTok, pDict );
+	CSphSource * pSrc = SpawnSource ( "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM posting WHERE id<=10000 AND id%2=0", pTok, pDict );
 
 	ISphTokenizer * pTok2 = sphCreateUTF8Tokenizer();
 	CSphDict * pDict2 = sphCreateDictionaryCRC ( tDictSettings, pTok, sError );
-	CSphSource * pSrc2 = SpawnSource ( "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM posting WHERE id<=100000 AND id%2=1", pTok2, pDict2 );
+	CSphSource * pSrc2 = SpawnSource ( "SELECT id, channel_id, UNIX_TIMESTAMP(published) published, title, UNCOMPRESS(content) content FROM posting WHERE id<=10000 AND id%2=1", pTok2, pDict2 );
 
 	CSphSchema tSrcSchema;
 	if ( !pSrc->UpdateSchema ( &tSrcSchema, sError ) )
