@@ -1200,6 +1200,7 @@ void RtIndex_t::MergeWord ( RtSegment_t * pSeg, const RtSegment_t * pSrc1, const
 				|| ( pSrc1->m_bTlsKlist && pAcc && pAcc->m_dAccumKlist.BinarySearch ( pDoc1->m_uDocID ) ) );
 			if ( !pSrc2->m_dKlist.BinarySearch ( pDoc2->m_uDocID ) )
 				CopyDoc ( pSeg, tOutDoc, &tWord, pSrc2, pDoc2 );
+			pDoc1 = tIn1.UnzipDoc();
 			pDoc2 = tIn2.UnzipDoc();
 
 		} else if ( pDoc1 && ( !pDoc2 || pDoc1->m_uDocID < pDoc2->m_uDocID ) )
@@ -1411,7 +1412,7 @@ RtSegment_t * RtIndex_t::MergeSegments ( const RtSegment_t * pSeg1, const RtSegm
 
 	assert ( pSeg->m_dRows.GetLength() );
 	assert ( pSeg->m_iRows );
-	assert ( pSeg->m_iAliveRows );
+	assert ( pSeg->m_iAliveRows==pSeg->m_iRows );
 	return pSeg;
 }
 
@@ -1491,10 +1492,20 @@ void RtIndex_t::Commit ()
 			break;
 
 		// check whether we have enough RAM
+#define LOC_ESTIMATE1(_seg,_vec) \
+	(int)( ((int64_t)_seg->_vec.GetLength()) * _seg->m_iAliveRows / _seg->m_iRows )
+
+#define LOC_ESTIMATE(_vec) \
+	( LOC_ESTIMATE1 ( dSegments[iLen-1], _vec ) + LOC_ESTIMATE1 ( dSegments[iLen-2], _vec) )
+
 		int64_t iEstimate =
-			CSphTightVectorPolicy<BYTE>::Relimit ( 0, dSegments[iLen-1]->m_dWords.GetLength() + dSegments[iLen-2]->m_dWords.GetLength() ) +
-			CSphTightVectorPolicy<BYTE>::Relimit ( 0, dSegments[iLen-1]->m_dDocs.GetLength() + dSegments[iLen-2]->m_dDocs.GetLength() ) +
-			CSphTightVectorPolicy<BYTE>::Relimit ( 0, dSegments[iLen-1]->m_dHits.GetLength() + dSegments[iLen-2]->m_dHits.GetLength() );
+			CSphTightVectorPolicy<BYTE>::Relimit ( 0, LOC_ESTIMATE ( m_dWords ) ) +
+			CSphTightVectorPolicy<BYTE>::Relimit ( 0, LOC_ESTIMATE ( m_dDocs ) ) +
+			CSphTightVectorPolicy<BYTE>::Relimit ( 0, LOC_ESTIMATE ( m_dHits ) );
+
+#undef LOC_ESTIMATE
+#undef LOC_ESTIMATE1
+
 		if ( iEstimate>iRamLeft )
 		{
 			bDump = true;
@@ -2027,7 +2038,6 @@ void RtIndex_t::SaveDiskChunk ()
 	CSphString sNewChunk;
 	sNewChunk.SetSprintf ( "%s.%d", m_sPath.cstr(), m_iDiskChunks );
 	SaveDiskData ( sNewChunk.cstr() );
-
 
 	// bring new disk chunk online
 	CSphIndex * pDiskChunk = LoadDiskChunk ( m_iDiskChunks );
