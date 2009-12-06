@@ -826,6 +826,9 @@ RtIndex_t::~RtIndex_t ()
 
 	ARRAY_FOREACH ( i, m_pDiskChunks )
 		SafeDelete ( m_pDiskChunks[i] );
+
+	if ( m_iLockFD>=0 )
+		::close ( m_iLockFD );
 }
 
 //////////////////////////////////////////////////////////////////////////
