@@ -894,7 +894,7 @@ void CleanupCallback ( void * pArg )
 
 void CleanupThread ( void * pArg )
 {
-	sphThreadOnExit ( CleanupCallback, pArg );	
+	sphThreadOnExit ( CleanupCallback, pArg );
 }
 
 void TestCleanup ()
@@ -1007,13 +1007,13 @@ public:
 	bool Connect ( CSphString & ) { return true; }
 	void Disconnect () {}
 	bool HasAttrsConfigured () { return true; }
-	bool CSphSource::IterateHitsStart ( CSphString & ) { m_tDocInfo.Reset ( m_tSchema.GetRowSize() ); return true; }
-	bool CSphSource::IterateMultivaluedStart ( int, CSphString & ) { return false; }
-	bool CSphSource::IterateMultivaluedNext () { return false; }
-	bool CSphSource::IterateFieldMVAStart ( int, CSphString & ) { return false; }
-	bool CSphSource::IterateFieldMVANext () { return false; }
-	bool CSphSource::IterateKillListStart ( CSphString & ) { return false; }
-	bool CSphSource::IterateKillListNext ( SphDocID_t & ) { return false; }
+	bool IterateHitsStart ( CSphString & ) { m_tDocInfo.Reset ( m_tSchema.GetRowSize() ); return true; }
+	bool IterateMultivaluedStart ( int, CSphString & ) { return false; }
+	bool IterateMultivaluedNext () { return false; }
+	bool IterateFieldMVAStart ( int, CSphString & ) { return false; }
+	bool IterateFieldMVANext () { return false; }
+	bool IterateKillListStart ( CSphString & ) { return false; }
+	bool IterateKillListNext ( SphDocID_t & ) { return false; }
 };
 
 static void CheckRT ( int iVal, int iRef, const char * sMsg )
