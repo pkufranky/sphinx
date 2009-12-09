@@ -26,6 +26,7 @@ if ( !is_array($args) || empty($args) )
 	print ( "-s, --searchd <PATH>\tpath to searchd\n" );
 	print ( "--strict\t\tterminate on the first failure (for automatic runs)\n" );
 	print ( "--managed\t\tdon't run searchd during test (for debugging)\n" );
+	print ( "--rt\t\t run rt round (all local indexes converted to rt)\n" );
 	print ( "\nEnvironment vriables are:\n" );
 	print ( "DBUSER\tuse 'USER' as MySQL user\n" );
 	print ( "DBPASS\tuse 'PASS' as MySQL password\n" );
@@ -38,6 +39,7 @@ if ( !is_array($args) || empty($args) )
 }
 
 $locals = array();
+$locals['rt_mode'] = false;
 
 if ( array_key_exists ( "DBUSER", $_ENV ) && $_ENV["DBUSER"] )
 	$locals['db-user'] = $_ENV["DBUSER"];
@@ -59,6 +61,7 @@ for ( $i=0; $i<count($args); $i++ )
 	else if ( $arg=="-p" || $arg=="--password" )	$locals['db-password'] = $args[++$i];
 	else if ( $arg=="-i" || $arg=="--indexer" )		$locals['indexer'] = $args[++$i];
 	else if ( $arg=="-s" || $arg=="--searchd" )		$locals['searchd'] = $args[++$i];
+	else if ( $arg=="--rt" )						$locals['rt_mode'] = true;
 	else if ( is_dir($arg) )						$test_dirs[] = $arg;
 	else if ( is_dir("test_$arg") )					$test_dirs[] = "test_$arg";
 	else if ( $arg=="--strict" )					$g_strict = true;

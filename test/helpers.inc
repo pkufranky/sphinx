@@ -31,9 +31,14 @@ function sphFormatTime ( $time )
 	return sprintf ( '%d%s:%d%s', $time / 60, $u[0], $time % 60, $u[1] );
 }
 
-function CreateDB ( $db_drop, $db_create, $db_insert )
+function CreateDB ( $db_drop, $db_create, $db_insert, $custom_insert )
 {
 	global $g_locals;
+	if ( !function_exists ( "mysql_connect" ) )
+	{
+		print ( "ERROR: missing required mysql_connect(); add php_mysql.so (.dll on Windows) to your php.ini!\n" );
+		exit ( 1 );
+	}
 
 	if ( !@mysql_connect ( $g_locals['db-host'].":".$g_locals['db-port'],
 			$g_locals['db-user'], $g_locals['db-password'] ) ||
@@ -53,6 +58,11 @@ function CreateDB ( $db_drop, $db_create, $db_insert )
 		if ( !@mysql_query ( $q ) )
 			return false;
 
+	foreach ( $custom_insert as $code )
+	{
+		$function = create_function( '', $code );
+		$function();
+	}
 	return true;
 }
 
@@ -222,6 +232,7 @@ class SphinxConfig
 	private $_db_create;
 	private $_db_drop;
 	private $_db_insert;
+	private $_custom_insert;
 	private $_counters;
 	private $_dynamic_entries;
 	private $_queries;
@@ -243,6 +254,7 @@ class SphinxConfig
 	private $_config;				///< config DOM node
 	private $_sphindex;				///< schema DOM node
 	private $_use_sphinxql;			///< true, if sphinxql queries exist
+        private $_indexdata;                    ///< data for use "insert into" instead of run indexer
 
 
 	function SphinxConfig ()
@@ -260,6 +272,7 @@ class SphinxConfig
 		$this->_db_create		= array ();
 		$this->_db_drop			= array ();
 		$this->_db_insert		= array ();
+		$this->_custom_insert	= array ();
 		$this->_num_agents		= 1;
 		$this->_subtest 		= 0;
 		$this->_subtestcount	= 0;
@@ -271,6 +284,7 @@ class SphinxConfig
 		$this->_compat098		= false;
 		$this->_skip_indexer	= false;
 		$this->_use_sphinxql	= false;
+                $this->_indexdata       = array ();
 	}
 
 	function EnableCompat098 ()		{ $this->_compat098 = true; }	
@@ -280,6 +294,7 @@ class SphinxConfig
 	function DB_Drop ()				{ return $this->_db_drop; }
 	function DB_Create ()			{ return $this->_db_create; }
 	function DB_Insert ()			{ return $this->_db_insert; }
+	function DB_CustomInsert ()		{ return $this->_custom_insert; }
 	function NumAgents ()			{ return $this->_num_agents; }
 	function Requires ( $name )		{ return isset($this->_prereqs[$name]); }
 	function IsQueryTest ()			{ return strlen ( $this->_custom_test ) == 0;	}
@@ -287,6 +302,11 @@ class SphinxConfig
 	function IsNeedDB()				{ return ! ( empty ( $this->_db_drop )
 										&& empty ( $this->_db_create )
 										&& empty ( $this->_db_insert ) ); }
+	function IsRt()
+	{
+		global $g_locals;
+		return $g_locals['rt_mode'];
+	}
 	function Results ()				{ return $this->_results; }
 	function GetQuery ( $i )		{ return $this->_queries[$i]; }
 	function IsSkipIndexer ()		{ return $this->_skip_indexer; }
@@ -623,6 +643,9 @@ class SphinxConfig
 		foreach ( ChildrenArray ( $xml, "db_insert" ) as $node )
 			$this->_db_insert []=$node->nodeValue;
 
+		foreach ( ChildrenArray ( $xml, "custom_insert" ) as $node )
+			$this->_custom_insert []=$node->nodeValue;
+
 		$this->_name			= GetFirstChildValue ( $xml, "name" );
 		$this->_query_settings	= GetFirstChildValue ( $xml, "query_settings" );
 		$this->_num_agents		= GetFirstChildValue ( $xml, "num_agents", 1 );
@@ -788,7 +811,7 @@ class SphinxConfig
 							}
 						}
 						
-						$results = $cl->Query ( $query, $my_index );
+						$results = $cl->Query ( $query, $my_index, "run".(1+$this->SubtestNo()) );
 						if ( is_array($results) )
 						{
 							$results["resarray"] = (int)@$qinfo["resarray"];
@@ -990,6 +1013,54 @@ class SphinxConfig
 	}
 
 
+	function CheckVariants ( $output_path )
+	{
+		if ( !$this->Requires("variant_match") )
+			return true;
+		
+		$total = count ( $this->_results_model );
+		if ( $total==1 )
+		{
+			printf ( "Variant match is required, but there are no variants.\n" );
+			return false;
+		}
+		else if ( !$this->IsQueryTest() )
+		{
+			printf ( "Variant match is not supported for non-query tests.\n" );
+			return false;
+		}
+
+		$failed = false;
+		$output = '';
+		for ( $i=1; $i<$total; $i++ )
+		{
+			$nqueries = count ( $this->_results_model[0] );
+			for ( $k=0; $k<$nqueries; $k++ )
+			if ( !$this->CompareResultSets ( $this->_results_model[0][$k], $this->_results_model[$i][$k] ) )
+			{
+				$first = $this->FormatResultSet ( $k+1, $this->_results_model[0][$k] );
+				$current = $this->FormatResultSet ( $k+1, $this->_results_model[$i][$k] );
+
+				file_put_contents ( "first", $first );
+				file_put_contents ( "current", $current );
+				system ( "diff --unified=3 first current > diff.txt" );
+						
+				$diff = file_get_contents ( "diff.txt" );
+				unlink ( "current" );
+				unlink ( "first" );
+				unlink ( "diff.txt" );
+
+				$output .= $diff . "\n";
+				$failed = true;
+			}
+		}
+
+		if ( $failed )
+			file_put_contents ( $output_path, $output );
+		return !$failed;
+	}
+
+
 	function WriteReportHeader ( $fp )
 	{
 		fprintf ( $fp, "==== Run %d ====\n", $this->SubtestNo () + 1 );
@@ -1090,6 +1161,25 @@ class SphinxConfig
 			}
 		}
 
+		// check our table for well-known id column names
+		$idcol = "";
+		if ( $this->IsNeedDB() )
+			$r = mysql_query ( "DESC test_table" );
+		else
+			$r = false;
+		if ( $r )
+		{
+			while ( $row = mysql_fetch_assoc($r) )
+			{
+				$idcand = strtolower ( $row["Field"] );
+				if ( array_search ( $idcand, array ( "id", "document_id" ) ) )
+				{
+					$idcol = $idcand;
+					break;
+				}
+			}
+		}
+
 		// format matches
 		$str .= "\n";
 		if ( isset($result["matches"]) && is_array($result["matches"]) )
@@ -1119,23 +1209,27 @@ class SphinxConfig
 				}
 
 				// fetch and format fields from db by default
-				if ( $this->IsNeedDB() )
-					$query_res = mysql_query ( "select * from test_table where document_id = $doc_id" );
-				else
-					$query_res = false;
-				if ( !$query_res )
-					continue;
+				if ( $idcol )
+				{
+					if ( $this->IsNeedDB() )
+						$query_res = mysql_query ( "select * from test_table where document_id = $doc_id" );
+					else
+						$query_res = false;
+					if ( $query_res )
+					{
 
-				$row = mysql_fetch_assoc ( $query_res );
-				if ( $row )
-					foreach ( $row as $col_name => $col_content )
-						if ( array_search ( $col_name, $result["fields"] )!==false )
-						   	$str .= " $col_name=\"$col_content\"";
-
+						$row = mysql_fetch_assoc ( $query_res );
+						if ( $row )
+							foreach ( $row as $col_name => $col_content )
+								if ( array_search ( $col_name, $result["fields"] )!==false )
+							   		$str .= " $col_name=\"$col_content\"";
+					}
+				}
+				// format attrs
 				foreach ( $docinfo["attrs"] as $attr=>$val )
 				{
 					if ( is_array($val) )
-						$val = join ( " ", $val );
+						$val = join ( ",", $val );
 					$str .= " $attr=\"$val\"";
 				}
 			}
@@ -1208,17 +1302,206 @@ class SphinxConfig
 
 	function WriteConfig ( $filename, $agentid )
 	{
+		global $g_locals;
 		$fp = fopen ( $filename, 'w' );
 		if ( !$fp )
 			return FALSE;
 
 		$this->Dump ( $this->_config, $fp, false, $agentid );
-	
 		fclose ( $fp );
-	
+
+		// for rt case - extract the schema from the config
+		// and make the new config, making the index as rt instead
+		if ( $this->IsRt() )
+		{
+			$fp = fopen ( $filename, 'r' );
+			if ( !$fp )
+				return FALSE;
+
+			$config = fread ( $fp, filesize ( $filename ) );
+			fclose ( $fp );
+
+			$pattern = "/(?<prolog>.*?)source\s+(?<srcname>\S*?)(\s*\:\s*(?<parent>\S*?))?\s*\{(?<content>.*?)\}(?<epilog>.*?)/s";
+			preg_match_all ( $pattern, $config, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE );
+			$schemas = array();
+			$prolog="";
+			$epilog=0;
+
+			// parse sources
+			foreach ( $matches as $match )
+			{
+				if ( preg_match ( "/\S+/", $match['prolog'][0] ) > 0 )
+					$prolog = $match['prolog'][0];
+				$epilog = $match['epilog'][1];
+				$lines = explode("\n", $match['content'][0]);
+				$insert_schema = array();
+				$insert_types = array();
+				if ( $match['parent'][0] != "" )
+					$insert_types = $schemas[$match['parent'][0]]['types'];
+				$fields = array();
+				foreach ($lines as $line)
+				{
+					// skip comment lines (if any)
+					if ( preg_match ( "/\s*#/" , $line ) > 0 )
+						continue;
+					$eq = strpos ( $line,"=" );
+					if ($eq == 0)
+						continue;
+					$key = strtolower ( trim ( substr($line,0,$eq), " \t" ) );
+					$value = trim ( substr($line,$eq+1), " \t" );
+					switch ( $key )
+					{
+						case "sql_attr_uint": $insert_types[$value] = "rt_attr_uint"; break;
+						case "sql_attr_bigint": $insert_types[$value] = "rt_attr_bigint"; break;
+						case "sql_attr_float":  $insert_types[$value] = "rt_attr_float"; break;
+						// case "sql_attr_timestamp": //< not yet
+						// case "sql_attr_multi" //< not yet
+						// case "sql_attr_string" //< not yet
+						case "sql_query":
+							// extract query values (already in db)
+
+						{
+							if ( !@mysql_connect ( $g_locals['db-host'].":".$g_locals['db-port'],
+								$g_locals['db-user'], $g_locals['db-password'] ) ||
+								!@mysql_select_db ( $g_locals['db-name'] ) )
+								return FALSE;
+							$res = @mysql_query($value);
+							if ($res)
+							{
+								$numrows = mysql_num_rows($res);
+								
+								$insert_values = array();
+								$fill_schema = true;
+								$schema_pos = 0;
+								while ($rows = mysql_fetch_array($res, MYSQL_ASSOC))
+								{
+									$row = array();
+									foreach ($rows as $key => $value)
+									{
+										if ( $fill_schema )
+												$insert_schema[$key] = $schema_pos++;
+
+										$row[] = $value;
+									}
+									$insert_values[] = $row;
+									$fill_schema = false;
+								}
+								mysql_free_result($res);
+							}
+						}
+					}
+				}
+				$schema = array();
+				$schema['types'] = $insert_types;
+				if ( $match['parent'][0] != "" )
+					$schema['orders'] = $schemas[$match['parent'][0]]['orders'];
+				else
+					$schema['orders'] = $insert_schema;
+				$schema['values'] = $insert_values;
+				$schemas[$match['srcname'][0]] = $schema;
+			}
+
+
+			$config = $prolog.substr($config,$epilog);
+			$pattern = "/(?<prolog>.*?)index\s+(?<idxname>\S*?)(\s*\:\s*(?<parent>\S*?))?\s*\{(?<content>.*?)\}(?<epilog>.*?)/s";
+			preg_match_all ( $pattern, $config, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE );
+			// parse indexes
+			$idxes = "";
+			$indexes = array();
+			foreach ( $matches as $match )
+			{
+				if ( preg_match ( "/\S+/", $match['prolog'][0] ) > 0 )
+					$prolog = $match['prolog'][0];
+				$epilog = $match['epilog'][1];
+				$idx = "index ".$match['idxname'][0];
+				if ( $match['parent'][0] != "" )
+					$idx .= " : ".$match['parent'][0];
+				$idx .= "\n{\n";
+
+				$lines = explode("\n", $match['content'][0]);
+				$justcopy = false;
+				$idxbody = "";
+				foreach ($lines as $line)
+				{
+					// skip comment lines (if any)
+					if ( preg_match ( "/\s*#/" , $line ) > 0 )
+						continue;
+					$eq = strpos ( $line,"=" );
+					if ($eq == 0)
+						continue;
+					$key = strtolower ( trim ( substr($line,0,$eq), " \t" ) );
+					$value = trim ( substr($line,$eq+1), " \t" );
+					switch ( $key )
+					{
+						case "type": $justcopy = true; break;
+						case "source";
+							{
+								$idxbody .= "\ttype\t= rt\n";
+								$indexes[$match['idxname'][0]] = $schemas[$value];
+								foreach ( array_keys( $schemas[$value]['orders'] ) as $key )
+									if ( $key != "id" && $key != "document_id" )
+									{
+										if ( array_key_exists ( $key, $schemas[$value]['types'] ) )
+											$idxbody .= "\t".$schemas[$value]['types'][$key]."\t= $key\n";
+										else
+											$idxbody .= "\trt_field\t= $key\n";
+									}
+								break;
+							}
+						default:
+							$idxbody .= "\t$key\t= $value\n";
+					}
+					if ( $justcopy ) // explicitly defined type, don't transform to rt.
+					{
+						$idxbody = $match['content'][0];
+						break;
+					}
+				}
+				$idx .= "$idxbody\n}\n";
+				$idxes .= $idx;
+
+			}
+                        $this->_indexdata = $indexes;
+			$config = $prolog.$idxes.substr($config,$epilog);
+			$fp = fopen ( $filename, 'w' );
+			if ( !$fp )
+				return FALSE;
+			fwrite ( $fp, $config );
+			fclose ( $fp );
+		}
 		return TRUE;
 	}
 
+	function InsertIntoIndexer ( &$error )
+	{
+	    	global $sd_address, $sd_sphinxql_port, $action_retries, $action_wait_timeout;
+		if ($sd_address == "localhost")
+			$connect_string = "127.0.0.1:$sd_sphinxql_port";
+		else
+			$connect_string = "$sd_address:$sd_sphinxql_port";
+
+		if ( !@mysql_connect ( $connect_string) )
+			return false;
+		foreach ( $this->_indexdata as $name => $data )
+		{
+		    foreach ($data['values'] as $row)
+		    {
+			$query = "INSERT INTO $name VALUES (";
+			foreach ( $row as $column )
+			    $query .="'".$column."',";
+			$query = substr ($query,0,strlen($query)-1);
+			$query .=")";
+			$result = @mysql_query ($query);
+			if ( $result === false )
+			{
+			   $error = mysql_error();
+			   return false;
+			}
+		    }
+		}
+		mysql_close ();
+		return true;
+	}
 
 	function WriteDiff ( $fp )
 	{
@@ -1245,7 +1528,7 @@ class SphinxConfig
 		else
 		{
 			fwrite ( $fp, "\tlisten		= {$this->_sd_address}:{$this->_sd_port}\n" );
-			if ( $this->_use_sphinxql )
+			if ( $this->_use_sphinxql || $this->IsRt() )
 				fwrite ( $fp, "\tlisten		= {$this->_sd_address}:{$this->_sd_sphinxql_port}:mysql41\n" );
 		}
 		fwrite ( $fp, "\tlog			= $sd_log\n" );
@@ -1415,7 +1698,7 @@ function RunTest ( $test_dir )
 		return array ( "tests_total"=>0, "tests_failed"=>0 );
 
 	if ( $config->IsNeedDB() )
-		if ( !CreateDB ( $config->DB_Drop(), $config->DB_Create(), $config->DB_Insert() ) )
+		if ( !CreateDB ( $config->DB_Drop(), $config->DB_Create(), $config->DB_Insert(), $config->DB_CustomInsert() ) )
 		{
 			printf ( "$prefix FAILED, error creating test DB: %s\n", mysql_error() );
 			return;
@@ -1430,7 +1713,8 @@ function RunTest ( $test_dir )
 	if ( !file_exists ( $conf_dir ) )
 		mkdir ( $conf_dir );
 
-	$report_file = $test_dir."/report.txt";
+	$report_path = "$test_dir/report";
+	$report_file = "$report_path.txt";
 	$report = fopen ( $report_file, "w" );
 
 	$nfailed = 0;
@@ -1462,17 +1746,20 @@ function RunTest ( $test_dir )
 		if ( $config->IsSkipIndexer()===false )
 		{
 			// standard run
-			$indexer_ret = RunIndexer ( $error, "--all" );
-			if ( $indexer_ret==1 )
-			{
-				if ( !HandleFailure ( $config, $report, $error, $nfailed ) )
-					$log .= "\tsubtest $subtest: error running indexer; see $report_file\n";
-				continue;
+                        if ( !$config->IsRt() )
+                        {
+                            $indexer_ret = RunIndexer ( $error, "--all" );
+                            if ( $indexer_ret==1 )
+                            {
+                                    if ( !HandleFailure ( $config, $report, $error, $nfailed ) )
+                                            $log .= "\tsubtest $subtest: error running indexer; see $report_file\n";
+                                    continue;
 
-			} else if ( $indexer_ret==2 )
-			{
-				fwrite ( $report, "$error\n" );
-			}
+                            } else if ( $indexer_ret==2 )
+                            {
+                                    fwrite ( $report, "$error\n" );
+                            }
+                        }
 
 			// additional optional runs (eg for merge tests)
 			$indexer_ret = $config->RunIndexerEx ( $error );
@@ -1548,6 +1835,10 @@ function RunTest ( $test_dir )
 		if ( $searchd_error )
 			continue;
 
+		// in case of RT index - run "insert into" instead of indexer
+		if ( $config->IsRt () )
+		    $config->InsertIntoIndexer ( $error );
+
 		if ( $config->IsQueryTest () )
 		{
 			$error = "";
@@ -1601,20 +1892,28 @@ function RunTest ( $test_dir )
 	foreach ( $stop as $conf=>$pid )
 		StopSearchd ( $conf, $pid );
 
-	fclose ( $report );
-	if ( $config->IsNeedDB() )
-		mysql_close ();
-
+	$total = $config->SubtestNo()+1;
 	if ( IsModelGenMode () )
-		printf ( "$prefix done; %d/%d subtests run\n", $config->SubtestNo(), $nsubtests );
+	{
+		if ( $config->CheckVariants ( $report_path."_variant.txt" ) )
+		{
+			$config->WriteModel ( $model_file );
+			printf ( "$prefix done; %d/%d subtests run\n", $config->SubtestNo(), $nsubtests );
+		}
+		else
+		{
+			printf ( "$prefix done; %d/%d subtests: VARIANT CHECK FAILED\n", $config->SubtestNo(), $nsubtests );
+			$nfailed = $total;
+		}
+	}
 	else if ( $nfailed==0 )
 		printf ( "$prefix done; %d/%d subtests OK\n", $config->SubtestNo(), $nsubtests );
 	else
 		printf ( "$prefix done; %d/%d subtests FAILED:\n%s", $nfailed, $nsubtests, $log );
 
-	$config->WriteModel ( $model_file );
+	fclose ( $report );
 
-	return array ( "tests_total"=>$config->SubtestNo()+1, "tests_failed"=>$nfailed );
+	return array ( "tests_total"=>$total, "tests_failed"=>$nfailed );
 }
 
 //
