@@ -1272,7 +1272,8 @@ struct CSphIndex_VLN : CSphIndex
 	bool						EarlyReject ( CSphQueryContext * pCtx, CSphMatch & tMatch ) const;
 
 	virtual SphAttr_t *			GetKillList () const;
-	virtual int					GetKillListSize ()const { return m_iKillListSize; }
+	virtual int					GetKillListSize () const { return m_iKillListSize; }
+	virtual bool				HasDocid ( SphDocID_t uDocid ) const;
 
 	virtual const CSphSourceStats &		GetStats () const { return m_tStats; }
 
@@ -10400,6 +10401,12 @@ bool CSphIndex_VLN::EarlyReject ( CSphQueryContext * pCtx, CSphMatch & tMatch ) 
 SphAttr_t * CSphIndex_VLN::GetKillList () const
 {
 	return m_pKillList.GetWritePtr ();
+}
+
+
+bool CSphIndex_VLN::HasDocid ( SphDocID_t uDocid ) const
+{
+	return FindDocinfo ( uDocid )!=NULL;
 }
 
 

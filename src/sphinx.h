@@ -2202,6 +2202,7 @@ public:
 	bool						IsStripperInited () const { return m_bStripperInited; }
 	virtual SphAttr_t *			GetKillList () const = 0;
 	virtual int					GetKillListSize () const = 0;
+	virtual bool				HasDocid ( SphDocID_t uDocid ) const = 0;
 
 public:
 	/// build index by indexing given sources

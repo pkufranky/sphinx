@@ -169,16 +169,13 @@ void RtDiskKlist_t::Flush()
 
 	m_tRwSmalllock.WriteLock();
 	m_tRwLargelock.WriteLock();
+
 	m_hSmallKlist.IterateStart();
-	int iLastLarge = m_dLargeKlist.GetLength()-1;
 	while ( m_hSmallKlist.IterateNext() )
-	{
-		SphAttr_t uDoc = m_hSmallKlist.IterateGetKey();
-		if ( !sphBinarySearch ( &m_dLargeKlist[0], &m_dLargeKlist[0] + iLastLarge, uDoc ) )
-			m_dLargeKlist.Add ( uDoc );
-	}
-	m_dLargeKlist.Sort();
+		m_dLargeKlist.Add ( m_hSmallKlist.IterateGetKey() );
+	m_dLargeKlist.Uniq();
 	m_hSmallKlist.Reset();
+
 	m_tRwLargelock.Unlock();
 	m_tRwSmalllock.Unlock();
 }
@@ -751,8 +748,9 @@ public:
 #pragma warning(push,1)
 #pragma warning(disable:4100)
 #endif
-	virtual SphAttr_t *			GetKillList () const			{ return NULL; }
-	virtual int					GetKillListSize () const		{ return 0; }
+	virtual SphAttr_t *			GetKillList () const				{ assert ( 0 ); return NULL; }
+	virtual int					GetKillListSize () const			{ assert ( 0 ); return 0; }
+	virtual bool				HasDocid ( SphDocID_t ) const		{ assert ( 0 ); return false; }
 
 	virtual int					Build ( const CSphVector<CSphSource*> & dSources, int iMemoryLimit, int iWriteBuffer ) { return 0; }
 	virtual bool				Merge ( CSphIndex * pSource, CSphVector<CSphFilterSettings> & dFilters, bool bMergeKillLists ) { return false; }
@@ -1542,12 +1540,33 @@ void RtIndex_t::Commit ()
 		ARRAY_FOREACH ( i, pAcc->m_dAccumKlist )
 		{
 			SphDocID_t uDocid = pAcc->m_dAccumKlist[i];
-			ARRAY_FOREACH ( j, m_pSegments )
+			bool bKilled = false;
+
+			// check RAM chunk
+			for ( int j=0; j<m_pSegments.GetLength() && !bKilled; j++ )
 				if ( m_pSegments[j]->HasDocid ( uDocid ) && !m_pSegments[j]->m_dKlist.BinarySearch ( uDocid ) )
+					bKilled = true;
+
+			// check disk chunks
+			if ( !bKilled )
+				for ( int j=m_pDiskChunks.GetLength()-1; j>=0; j-- )
+					if ( m_pDiskChunks[j]->HasDocid ( uDocid ) )
 			{
-				iTotalKilled++;
+				// we just found the most recent chunk with our suspect docid
+				// let's check whether it's already killed by subsequent chunks, or gets killed now
+				bKilled = true;
+				SphAttr_t uRef = uDocid;
+				for ( int k=j+1; k<m_pDiskChunks.GetLength(); k++ )
+					if ( sphBinarySearch ( m_pDiskChunks[k]->GetKillList(), m_pDiskChunks[k]->GetKillList() + m_pDiskChunks[j]->GetKillListSize(), uRef ) )
+				{
+					bKilled = false;
+					break;
+				}
 				break;
 			}
+
+			if ( bKilled )
+				iTotalKilled++;
 		}
 
 		// update K-lists on survivors
@@ -1576,6 +1595,10 @@ void RtIndex_t::Commit ()
 			// mark as good
 			pSeg->m_bTlsKlist = false;
 		}
+
+		// update disk K-list
+		ARRAY_FOREACH ( i, pAcc->m_dAccumKlist )
+			m_tKlist.Delete ( pAcc->m_dAccumKlist[i] );
 	}
 
 	// go live!
