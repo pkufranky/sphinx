@@ -180,7 +180,7 @@ enum Mpm_e
 	MPM_THREADS		///< create a worker thread for each query
 };
 
-static Mpm_e			g_eWorkers			= USE_WINDOWS ? MPM_NONE : MPM_FORK;
+static Mpm_e			g_eWorkers			= USE_WINDOWS ? MPM_NONE : MPM_THREADS;
 
 static int				g_iPreforkChildren	= 10;		// how much workers to keep
 static CSphVector<int>	g_dChildren;
@@ -8939,14 +8939,15 @@ int WINAPI ServiceMain ( int argc, char **argv )
 #if USE_WINDOWS
 			sphDie ( "workers=fork is not supported on Windows" );
 #endif
-			g_eWorkers = MPM_FORK;
+			sphWarning ( "workers=fork is not supported on rt backend. Assume workers=threads" );
+			g_eWorkers = MPM_THREADS;
 		} else if ( hSearchd["workers"]=="prefork" )
 		{
 #if USE_WINDOWS
 			sphDie ( "workers=prefork is not supported on Windows" );
 #endif
-			g_eWorkers = MPM_PREFORK;
-			g_iPreforkChildren = hSearchd.GetInt ( "prefork", g_iPreforkChildren );
+			sphWarning ( "workers=prefork is not supported on rt backend. Assume workers=threads" );
+			g_eWorkers = MPM_THREADS;
 		} else if ( hSearchd["workers"]=="threads" )
 		{
 			g_eWorkers = MPM_THREADS;

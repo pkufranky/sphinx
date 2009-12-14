@@ -40,22 +40,23 @@ function CreateDB ( $db_drop, $db_create, $db_insert, $custom_insert )
 		exit ( 1 );
 	}
 
-	if ( !@mysql_connect ( $g_locals['db-host'].":".$g_locals['db-port'],
-			$g_locals['db-user'], $g_locals['db-password'] ) ||
-		!@mysql_query ( "CREATE DATABASE IF NOT EXISTS " . $g_locals['db-name'] ) ||
-		!@mysql_select_db ( $g_locals['db-name'] ) )
+	$connection = @mysql_connect ( $g_locals['db-host'].":".$g_locals['db-port'],
+			$g_locals['db-user'], $g_locals['db-password'] );
+	if ( $connection === false ||
+		!@mysql_query ( "CREATE DATABASE IF NOT EXISTS " . $g_locals['db-name'], $connection ) ||
+		!@mysql_select_db ( $g_locals['db-name'], $connection ) )
 		return false;
 
 	foreach ( $db_drop as $q )
-		if ( !@mysql_query ( $q ) )
+		if ( !@mysql_query ( $q, $connection ) )
 			return false;
 
 	foreach ( $db_create as $q )
-		if ( !@mysql_query ( $q ) )
+		if ( !@mysql_query ( $q, $connection ) )
 			return false;
 
 	foreach ( $db_insert as $q )
-		if ( !@mysql_query ( $q ) )
+		if ( !@mysql_query ( $q, $connection ) )
 			return false;
 
 	foreach ( $custom_insert as $code )
@@ -63,7 +64,7 @@ function CreateDB ( $db_drop, $db_create, $db_insert, $custom_insert )
 		$function = create_function( '', $code );
 		$function();
 	}
-	return true;
+	return $connection;
 }
 
 
@@ -255,8 +256,13 @@ class SphinxConfig
 	private $_sphindex;				///< schema DOM node
 	private $_use_sphinxql;			///< true, if sphinxql queries exist
         private $_indexdata;                    ///< data for use "insert into" instead of run indexer
+	private $_connection;			///< mysql connection (since we cound use mysql ans sqphinxql together)
 
 
+	function SetConnection($connection)
+	{
+		$this->_connection = $connection;
+	}
 	function SphinxConfig ()
 	{
 		global $sd_address, $sd_port, $sd_sphinxql_port, $sd_pid_file;
@@ -284,7 +290,8 @@ class SphinxConfig
 		$this->_compat098		= false;
 		$this->_skip_indexer	= false;
 		$this->_use_sphinxql	= false;
-                $this->_indexdata       = array ();
+		$this->_indexdata       = array ();
+		$this->_connection		= false;
 	}
 
 	function EnableCompat098 ()		{ $this->_compat098 = true; }	
@@ -690,21 +697,21 @@ class SphinxConfig
 			$connect_string = "127.0.0.1:$sd_sphinxql_port";
 		else
 			$connect_string = "$sd_address:$sd_sphinxql_port";
-
-		if ( !@mysql_connect ( $connect_string) )
+		$connection = @mysql_connect ( $connect_string );
+		if ( $connection === false )
 			return false;
 		for ( $n=0; $n<count($this->_sphqueries); $n++ )
 		{
 			$query_result = array ();
 			$query = $this->_sphqueries[$n]["query"];
 			$query_result["sphinxql"]=$query;
-			$result = @mysql_query ($query);
+			$result = @mysql_query ($query,$connection);
 			if ($result===true)
-				$query_result["total_affected"] = mysql_affected_rows();
+				$query_result["total_affected"] = mysql_affected_rows($connection);
 			else if ($result===false)
 			{
-				$query_result["error"] = mysql_error();
-				$query_result["errno"] = mysql_errno();
+				$query_result["error"] = mysql_error( $connection );
+				$query_result["errno"] = mysql_errno( $connection );
 			} else
 			{
 				$query_result["total_rows"] = mysql_num_rows($result);
@@ -723,7 +730,7 @@ class SphinxConfig
 		if ( IsModelGenMode () )
 			array_push ( $this->_results_model, $query_results );
 
-		mysql_close ();
+		mysql_close ( $connection );
 		return true;
 	}
 
@@ -1164,7 +1171,7 @@ class SphinxConfig
 		// check our table for well-known id column names
 		$idcol = "";
 		if ( $this->IsNeedDB() )
-			$r = mysql_query ( "DESC test_table" );
+			$r = mysql_query ( "DESC test_table", $this->_connection );
 		else
 			$r = false;
 		if ( $r )
@@ -1212,7 +1219,8 @@ class SphinxConfig
 				if ( $idcol )
 				{
 					if ( $this->IsNeedDB() )
-						$query_res = mysql_query ( "select * from test_table where document_id = $doc_id" );
+						$query_res = mysql_query ( "select * from test_table where document_id = $doc_id",
+							$this->_connection);
 					else
 						$query_res = false;
 					if ( $query_res )
@@ -1480,7 +1488,8 @@ class SphinxConfig
 		else
 			$connect_string = "$sd_address:$sd_sphinxql_port";
 
-		if ( !@mysql_connect ( $connect_string) )
+		$connection = @mysql_connect ( $connect_string );
+		if ( $connection === false )
 			return false;
 		foreach ( $this->_indexdata as $name => $data )
 		{
@@ -1491,15 +1500,15 @@ class SphinxConfig
 			    $query .="'".$column."',";
 			$query = substr ($query,0,strlen($query)-1);
 			$query .=")";
-			$result = @mysql_query ($query);
+			$result = @mysql_query ( $query, $connection );
 			if ( $result === false )
 			{
-			   $error = mysql_error();
+			   $error = mysql_error ( $conneciton );
 			   return false;
 			}
 		    }
 		}
-		mysql_close ();
+		mysql_close ( $connection );
 		return true;
 	}
 
@@ -1698,11 +1707,15 @@ function RunTest ( $test_dir )
 		return array ( "tests_total"=>0, "tests_failed"=>0 );
 
 	if ( $config->IsNeedDB() )
-		if ( !CreateDB ( $config->DB_Drop(), $config->DB_Create(), $config->DB_Insert(), $config->DB_CustomInsert() ) )
+	{
+		$connection = CreateDB ( $config->DB_Drop(), $config->DB_Create(), $config->DB_Insert(), $config->DB_CustomInsert() );
+		if ( $connection === false )
 		{
 			printf ( "$prefix FAILED, error creating test DB: %s\n", mysql_error() );
 			return;
 		}
+		$config->SetConnection($connection);
+	}
 
 	if ( !$config->LoadModel ( $model_file ) )
 	{
