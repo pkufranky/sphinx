@@ -14,16 +14,16 @@ searchd
 <Searchd_Settings/>
 }
 
-<Index_Schema/>
-</Config>
+index test
+{
 
-<SPHIndexes>
-<SPHIndex name="test">
-	<rt_attr_int>idd</rt_attr_int>
-	<rt_attr_int>grp</rt_attr_int>
-	<rt_field>content</rt_field>
-</SPHIndex>
-</SPHIndexes>
+	type	= rt
+	path	= data/test
+	rt_attr_int	= idd
+	rt_attr_int	= grp
+	rt_field	= content
+} 
+</Config>
 
 <SPHQueries>
 	<SPHinxQL>insert into test (id,idd,grp,content) values (1,5,4,'content'),(2,2,4,'you')</SPHinxQL>

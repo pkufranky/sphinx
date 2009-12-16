@@ -14,15 +14,14 @@ searchd
 <Searchd_Settings/>
 }
 
-<Index_Schema/>
+index test
+{
+	type	= rt
+	path	= data/test
+	rt_attr_float	= flt
+	rt_field	= title
+}
 </Config>
-
-<SPHIndexes>
-<SPHIndex name="test">
-	<rt_attr_float>flt</rt_attr_float>
-	<rt_field>title</rt_field>
-</SPHIndex>
-</SPHIndexes>
 
 <SPHQueries>
 	<SPHinxQL>insert into test (id,flt,title) values (1,0.3,'zero'),(2,.3,'no zero')</SPHinxQL>
