@@ -215,8 +215,8 @@ void RtDiskKlist_t::LoadFromFile ( const char * sFilename )
 
 void RtDiskKlist_t::SaveToFile ( const char * sFilename )
 {
-	m_tRwLargelock.ReadLock();
 	Flush();
+	m_tRwLargelock.ReadLock();
 	CSphWriter wrKlist;
 	CSphString sName, sError;
 	sName.SetSprintf ( "%s.kill", sFilename );
