@@ -112,6 +112,7 @@ $total_tests = 0;
 $total_tests_failed = 0;
 $total_subtests = 0;
 $total_subtests_failed = 0;
+$total_skipped = 0;
 foreach ( $tests as $test )
 {
 	if ( $windows && !$sd_managed_searchd )
@@ -119,9 +120,12 @@ foreach ( $tests as $test )
 		// avoid an issue with daemons stuck in exit(0) for some seconds
 		$sd_port += 10;
 		$agent_port += 10;
+		$agent_port_sql += 10;
 		$agents	= array (
-			array ( "address" => $sd_address, "port" => $sd_port ),
-			array ( "address" => $agent_address, "port" => $agent_port ) );
+			array ( "address" => $sd_address, "port" => $sd_port, "sqlport" => $sd_sphinxql_port ),
+			array ( "address" => $agent_address, "port" => $agent_port, "sqlport" => $agent_port_sql ),
+
+		);
 	}
 
 	if ( file_exists ( $test."/test.xml" ) )
@@ -137,6 +141,7 @@ foreach ( $tests as $test )
 		}
 
 		$total_subtests += $res["tests_total"];
+		$total_skipped += $res["tests_skipped"];
 		if ( $res["tests_failed"] )
 		{
 			$total_tests_failed++;
@@ -181,15 +186,15 @@ while ( file_exists ( "error_$nfile.txt" ) )
 // summarize
 if ( $total_tests_failed )
 {
-	printf ( "\n%d of %d tests and %d of %d subtests failed, %.2f sec elapsed\nTHERE WERE FAILURES!\n",
+	printf ( "\n%d of %d tests and %d of %d subtests failed, %d tests skipped, %.2f sec elapsed\nTHERE WERE FAILURES!\n",
 		$total_tests_failed, $total_tests,
-		$total_subtests_failed, $total_subtests,
+		$total_subtests_failed, $total_subtests,$total_skipped,
 		MyMicrotime()-$t );
 	exit ( 1 );
 } else
 {
-	printf ( "\n%d tests and %d subtests succesful, %.2f sec elapsed\nALL OK\n",
-		$total_tests, $total_subtests,
+	printf ( "\n%d tests and %d subtests succesful, %d tests skipped, %.2f sec elapsed\nALL OK\n",
+		$total_tests, $total_subtests, $total_skipped,
 		MyMicrotime()-$t );
 	exit ( 0 );
 }
