@@ -5942,6 +5942,47 @@ void SendMysqlEofPacket ( NetOutputBuffer_c & tOut, BYTE uPacketID, int iWarns )
 	tOut.SendLSBDword ( iWarns ); // N warnings, 0 status
 }
 
+// encodes Mysql Length-coded binary
+void * MysqlPack ( void * pBuffer, int iValue )
+{
+	char * pOutput = ( char * ) pBuffer;
+	if ( iValue < 0 )
+		return ( void * ) pOutput;
+
+	if ( iValue < 251 )
+	{
+		* pOutput++ = (char)iValue;
+		return ( void * ) pOutput;
+	}
+	
+	if ( iValue < 0xFFFF )
+	{
+		* pOutput++ = '\xFC';
+		* pOutput++ = (char)iValue;
+		* pOutput++ = (char)(iValue >> 8);
+		return ( void * ) pOutput;
+	}
+	
+	if ( iValue < 0xFFFFFF )
+	{
+		* pOutput++ = '\xFD';
+		* pOutput++ = (char)iValue;
+		* pOutput++ = (char)(iValue >> 8);
+		* pOutput++ = (char)(iValue >> 16);
+		return ( void * ) pOutput;
+	}
+
+	* pOutput++ = '\xFE';
+	* pOutput++ = (char)iValue;
+	* pOutput++ = (char)(iValue >> 8);
+	* pOutput++ = (char)(iValue >> 16);
+	* pOutput++ = (char)(iValue >> 24);
+	* pOutput++ = 0;
+	* pOutput++ = 0;
+	* pOutput++ = 0;
+	* pOutput++ = 0;
+	return ( void * ) pOutput;
+}
 
 void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 {
@@ -6128,10 +6169,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 							}
 
 							iLen = (BYTE*)p - pLen - 4;
-							pLen[0] = 253; // 3-byte
-							pLen[1] = BYTE(iLen&0xff);
-							pLen[2] = BYTE((iLen>>8)&0xff);
-							pLen[3] = BYTE((iLen>>16)&0xff);
+							MysqlPack(pLen,iLen);
 							break;
 						}
 
@@ -6148,20 +6186,8 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 								iLen = sphUnpackStr ( pStrings+uOffset, &pStr );
 
 							// send length
-							BYTE * pLen = (BYTE*)p;
 							iLen = Min ( iLen, sRowMax-p-3 ); // clamp it, buffer size is limited
-							if ( iLen<251 )
-							{
-								pLen[0] = BYTE(iLen);
-								p++;
-							} else
-							{
-								assert ( iLen<=0xffff );
-								pLen[0] = 252;
-								pLen[1] = BYTE(iLen&0xff);
-								pLen[2] = BYTE(iLen>>8);
-								p += 3;
-							}
+							p = ( char* ) MysqlPack ( p, iLen );
 
 							// send string data
 							if ( iLen )
@@ -6449,7 +6475,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 			pIndex->Commit ();
 
 			// my OK packet
-			sOK[5] = (char)tStmt.m_iRowsAffected; // 1 row affected (for now)
+			MysqlPack(sOK+5,tStmt.m_iRowsAffected);
 			tOut.SendBytes ( sOK, sizeof(sOK)-1 );
 			sOK[5] = 0; // restore affected rows for everyone else
 			continue;
