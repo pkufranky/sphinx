@@ -141,10 +141,21 @@ private:
 	mutable CSphRwlock				m_tRwLargelock;
 	mutable CSphRwlock				m_tRwSmalllock;
 
+	void NakedFlush();				// flush without lockers
+
 public:
 	RtDiskKlist_t() { m_tRwLargelock.Init(); m_tRwSmalllock.Init(); }
 	virtual ~RtDiskKlist_t() { m_tRwLargelock.Done(); m_tRwSmalllock.Done(); }
-	void Flush();
+	void Flush()
+	{
+		if ( m_hSmallKlist.GetLength()==0 )
+			return;
+		m_tRwSmalllock.WriteLock();
+		m_tRwLargelock.WriteLock();
+		NakedFlush();
+		m_tRwLargelock.Unlock();
+		m_tRwSmalllock.Unlock();
+	}
 	void LoadFromFile ( const char * sFilename );
 	void SaveToFile ( const char * sFilename );
 	inline void Delete ( SphDocID_t uDoc )
@@ -153,7 +164,7 @@ public:
 		if ( !m_hSmallKlist.Exists ( uDoc ) )
 			m_hSmallKlist.Add ( true, uDoc );
 		if ( m_hSmallKlist.GetLength() >= MAX_SMALL_SIZE )
-			Flush();
+			NakedFlush();
 		m_tRwSmalllock.Unlock();
 	}
 	inline const SphAttr_t * GetKillList () const { return & m_dLargeKlist[0]; }
@@ -162,22 +173,15 @@ public:
 	inline bool KillListUnlock() const { return m_tRwLargelock.Unlock(); }
 };
 
-void RtDiskKlist_t::Flush()
+void RtDiskKlist_t::NakedFlush()
 {
 	if ( m_hSmallKlist.GetLength()==0 )
 		return;
-
-	m_tRwSmalllock.WriteLock();
-	m_tRwLargelock.WriteLock();
-
 	m_hSmallKlist.IterateStart();
 	while ( m_hSmallKlist.IterateNext() )
 		m_dLargeKlist.Add ( m_hSmallKlist.IterateGetKey() );
 	m_dLargeKlist.Uniq();
 	m_hSmallKlist.Reset();
-
-	m_tRwLargelock.Unlock();
-	m_tRwSmalllock.Unlock();
 }
 
 void RtDiskKlist_t::LoadFromFile ( const char * sFilename )
@@ -215,8 +219,11 @@ void RtDiskKlist_t::LoadFromFile ( const char * sFilename )
 
 void RtDiskKlist_t::SaveToFile ( const char * sFilename )
 {
-	Flush();
-	m_tRwLargelock.ReadLock();
+	m_tRwLargelock.WriteLock();
+	m_tRwSmalllock.WriteLock();
+	NakedFlush();
+	m_tRwSmalllock.Unlock();
+
 	CSphWriter wrKlist;
 	CSphString sName, sError;
 	sName.SetSprintf ( "%s.kill", sFilename );
