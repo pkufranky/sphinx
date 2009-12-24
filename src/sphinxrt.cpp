@@ -1480,23 +1480,30 @@ void RtIndex_t::Commit ()
 	if ( pNewSeg )
 		dSegments.Add ( pNewSeg );
 
+	int64_t iRamFreed = 0;
+
 	// enforce RAM usage limit
 	int64_t iRamLeft = m_iRamSize;
 	ARRAY_FOREACH ( i, dSegments )
 		iRamLeft = Max ( 0, iRamLeft - dSegments[i]->GetUsedRam() );
 
-	// skip merging if no rows were added
-	bool bDump = false;
-	const int MAX_SEGMENTS = 8;
-	while ( pNewSeg )
+	// skip merging if no rows were added or no memory left
+	bool bDump = ( iRamLeft==0 );
+	const int MAX_SEGMENTS = 32;
+	const int MAX_PROGRESSION_SEGMENT = 8;
+	while ( pNewSeg && iRamLeft>0 )
 	{
 		dSegments.Sort ( CmpSegments_fn() );
 
 		// unconditionally merge if there's too much segments now
 		// conditionally merge if smallest segment has grown too large
 		// otherwise, we're done
-		int iLen = dSegments.GetLength();
-		if (!( iLen>MAX_SEGMENTS || ( iLen>=2 && dSegments[iLen-1]->GetMergeFactor()*2 > dSegments[iLen-2]->GetMergeFactor() ) ))
+		const int iLen = dSegments.GetLength();
+		if ( iLen < ( MAX_SEGMENTS - MAX_PROGRESSION_SEGMENT ) )
+			break;
+		assert ( iLen>=2 );
+		// exit if progression is kept AND lesser MAX_SEGMENTS limit
+		if ( dSegments[iLen-2]->GetMergeFactor() > dSegments[iLen-1]->GetMergeFactor()*2 && iLen < MAX_SEGMENTS )
 			break;
 
 		// check whether we have enough RAM
@@ -1516,7 +1523,8 @@ void RtIndex_t::Commit ()
 
 		if ( iEstimate>iRamLeft )
 		{
-			bDump = true;
+			// dump case: can't merge any more AND segments count limit's reached
+			bDump = ( ( iRamLeft + iRamFreed ) <= iEstimate ) && ( iLen >= MAX_SEGMENTS );
 			break;
 		}
 
@@ -1526,6 +1534,8 @@ void RtIndex_t::Commit ()
 		dSegments.Add ( MergeSegments ( pA, pB ) );
 		dToKill.Add ( pA );
 		dToKill.Add ( pB );
+
+		iRamFreed += pA->GetUsedRam() + pB->GetUsedRam();
 
 		int64_t iMerged = dSegments.Last()->GetUsedRam();
 		iRamLeft -= Min ( iRamLeft, iMerged );
