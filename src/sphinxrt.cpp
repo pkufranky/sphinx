@@ -755,8 +755,8 @@ public:
 #pragma warning(push,1)
 #pragma warning(disable:4100)
 #endif
-	virtual SphAttr_t *			GetKillList () const				{ assert ( 0 ); return NULL; }
-	virtual int					GetKillListSize () const			{ assert ( 0 ); return 0; }
+	virtual SphAttr_t *			GetKillList () const				{ return NULL; }
+	virtual int					GetKillListSize () const			{ return 0; }
 	virtual bool				HasDocid ( SphDocID_t ) const		{ assert ( 0 ); return false; }
 
 	virtual int					Build ( const CSphVector<CSphSource*> & dSources, int iMemoryLimit, int iWriteBuffer ) { return 0; }
