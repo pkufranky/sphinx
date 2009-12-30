@@ -983,6 +983,7 @@ void sigterm ( int )
 
 	// in head or (possibly) locked preforked child, perform clean shutdown
 	g_bGotSigterm = true;
+	sphInterruptNow();
 }
 
 
@@ -5913,21 +5914,34 @@ void SendMysqlFieldPacket ( NetOutputBuffer_c & tOut, BYTE uPacketID, const char
 	tOut.SendWord ( 0 ); // filler
 }
 
+enum MysqlErrors_e
+{
+	MYSQL_ERR_SYNTAX		= 1064,
+	MYSQL_ERR_SHUTDOWN		= 1053
+};
 
-void SendMysqlErrorPacket ( NetOutputBuffer_c & tOut, BYTE uPacketID, const char * sError )
+void SendMysqlErrorPacket ( NetOutputBuffer_c & tOut, BYTE uPacketID, const char * sError, MysqlErrors_e iErr = MYSQL_ERR_SYNTAX )
 {
 	if ( sError==NULL )
 		sError = "(null)";
 
 	int iErrorLen = strlen(sError)+1; // including the trailing zero
 	int iLen = 9 + iErrorLen;
-	int iError = 1064; // pretend to be mysql syntax error for now
+	int iError = iErr; // pretend to be mysql syntax error for now
 
 	tOut.SendLSBDword ( (uPacketID<<24) + iLen );
 	tOut.SendByte ( 0xff ); // field count, always 0xff for error packet
 	tOut.SendByte ( BYTE(iError&0xff) );
 	tOut.SendByte ( BYTE(iError>>8) );
-	tOut.SendBytes ( "#42000", 6 ); // sqlstate marker (1 byte), sqlstate (5 bytes)
+	switch ( iErr )
+	{
+	case MYSQL_ERR_SHUTDOWN:
+		tOut.SendBytes ( "#08S01", 6 ); // sqlstate marker (1 byte), sqlstate (5 bytes)
+		break;
+	case MYSQL_ERR_SYNTAX:
+	default:
+		tOut.SendBytes ( "#42000", 6 ); // sqlstate marker (1 byte), sqlstate (5 bytes)
+	}
 	tOut.SendBytes ( sError, iErrorLen );
 }
 
@@ -6079,6 +6093,13 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 
 			// actual searching
 			tHandler.RunQueries ();
+
+			if ( g_bGotSigterm )
+			{
+				SendMysqlErrorPacket ( tOut, uPacketID, "Server shutdown in progress", MYSQL_ERR_SHUTDOWN );
+				continue;
+			}
+
 			AggrResult_t * pRes = &tHandler.m_dResults[0];
 			if ( !pRes->m_iSuccesses )
 			{
@@ -8143,7 +8164,10 @@ void ShowHelp ()
 BOOL WINAPI CtrlHandler ( DWORD )
 {
 	if ( !g_bService )
+	{
 		g_bGotSigterm = true;
+		sphInterruptNow();
+	}
 	return TRUE;
 }
 #endif
@@ -8246,6 +8270,7 @@ void CheckSignals ()
 
 			case 1:
 				g_bGotSigterm = true;
+				sphInterruptNow();
 				if ( g_bService )
 					g_bServiceStop = true;
 				break;

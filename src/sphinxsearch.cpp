@@ -180,7 +180,18 @@ protected:
 	float						m_fIDF;			///< IDF for this term (might be 0.0f for non-1st occurences in query)
 	int64_t						m_iMaxTimer;	///< work until this timestamp
 	CSphString *				m_pWarning;
+
+public:
+	static volatile bool		m_bInterruptNow; ///< may be set from outside to indicate the globally received sigterm
 };
+
+/// Immediately interrupt current operation
+void sphInterruptNow()
+{
+	ExtTerm_c::m_bInterruptNow = true;
+}
+
+volatile bool ExtTerm_c::m_bInterruptNow = false;
 
 /// single keyword streamer with artificial hitlist
 class ExtTermHitless_c: public ExtTerm_c
@@ -851,6 +862,14 @@ const ExtDoc_t * ExtTerm_c::GetDocsChunk ( SphDocID_t * pMaxID )
 	{
 		if ( m_pWarning )
 			*m_pWarning = "query time exceeded max_query_time";
+		return NULL;
+	}
+
+	// interrupt by sitgerm
+	if ( m_bInterruptNow )
+	{
+		if ( m_pWarning )
+			*m_pWarning = "Server shutdown in progress";
 		return NULL;
 	}
 

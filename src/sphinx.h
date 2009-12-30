@@ -178,6 +178,9 @@ bool			sphIsReadable ( const char * sFilename, CSphString * pError=NULL );
 /// set throttling options
 void			sphSetThrottling ( int iMaxIOps, int iMaxIOSize );
 
+/// immediately interrupt current query
+void			sphInterruptNow();
+
 #if !USE_WINDOWS
 /// set process info
 void			sphSetProcessInfo ( bool bHead );
