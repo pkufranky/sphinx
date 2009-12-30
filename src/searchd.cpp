@@ -1511,7 +1511,7 @@ public:
 
 	bool		SendString ( const char * sStr );
 
-	int			GetMysqlPacklen ( const char * sStr ) const;
+	static int	GetMysqlPacklen ( const char * sStr );
 	bool		SendMysqlString ( const char * sStr );
 
 	bool		Flush ();
@@ -1644,7 +1644,7 @@ bool NetOutputBuffer_c::SendString ( const char * sStr )
 }
 
 
-int NetOutputBuffer_c::GetMysqlPacklen ( const char * sStr ) const
+int NetOutputBuffer_c::GetMysqlPacklen ( const char * sStr )
 {
 	int iLen = strlen(sStr);
 	if ( iLen<251 )		return 1+iLen;
@@ -4770,7 +4770,11 @@ enum SqlStmt_e
 	STMT_DELETE,
 	STMT_SHOW_WARNINGS,
 	STMT_SHOW_STATUS,
-	STMT_SHOW_META
+	STMT_SHOW_META,
+	STMT_SET,
+	STMT_STARTTRANSACTION,
+	STMT_COMMIT,
+	STMT_ROLLBACK
 };
 
 
@@ -4819,6 +4823,11 @@ struct SqlStmt_t
 	// DELETE specific
 	CSphString				m_sDeleteIndex;
 	SphDocID_t				m_iDeleteID;
+	
+	// SET specific
+	CSphString				m_sSetName;
+	int						m_iSetValue;
+
 
 	SqlStmt_t()
 		: m_iRowsAffected(0)
@@ -4858,6 +4867,7 @@ struct SqlParser_t
 	bool			AddOption ( SqlNode_t tIdent, SqlNode_t tValue );
 	void			AddItem ( YYSTYPE * pExpr, YYSTYPE * pAlias, ESphAggrFunc eFunc=SPH_AGGR_NONE );
 	bool			AddSchemaItem ( YYSTYPE * pNode );
+	void			SetValue ( const char * sName, YYSTYPE tValue );
 };
 
 
@@ -5998,6 +6008,30 @@ void * MysqlPack ( void * pBuffer, int iValue )
 	return ( void * ) pOutput;
 }
 
+void SendMysqlOkPacket ( NetOutputBuffer_c & tOut, BYTE uPacketID, int iAffectedRows=0, int iWarns=0, const char * sMessage=NULL )
+{
+	DWORD iInsert_id = 0;
+	char sVarLen[20] = {0}; // max 18 for packed number, +1 more just for fun
+	void * pBuf = sVarLen;
+	pBuf = MysqlPack ( pBuf, iAffectedRows );
+	pBuf = MysqlPack ( pBuf, iInsert_id );
+	int iLen = (char *) pBuf - sVarLen;
+
+	int iMsgLen = 0;
+	if ( sMessage )
+		iMsgLen = strlen(sMessage) + 1; // FIXME! does or doesn't the trailing zero necessary in Ok packet?
+
+	tOut.SendLSBDword ( (uPacketID<<24) + iLen + iMsgLen + 5);
+	tOut.SendByte ( 0 );				// ok packet
+	tOut.SendBytes ( sVarLen, iLen );	// packed affected rows & insert_id
+	if ( iWarns<0 ) iWarns = 0;
+	if ( iWarns>65535 ) iWarns = 65535;
+	tOut.SendLSBDword ( iWarns );		// N warnings, 0 status
+	if ( iMsgLen > 0 )
+		tOut.SendBytes ( sMessage, iMsgLen );
+}
+
+
 void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 {
 	// handshake
@@ -6036,6 +6070,10 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 	tLastMeta.m_iMatches = 0;
 	tLastMeta.m_iTotalMatches = 0;
 
+	// set on client's level, not on query's
+	bool bAutoCommit = true;
+	bool bInTransaction = false; //ignores bAutoCommit inside transaction
+
 	for ( ;; )
 	{
 		// send the packet formed on the previous cycle
@@ -6054,14 +6092,11 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 		// handle it!
 		uPacketID = 1 + BYTE(uPacketHeader>>24); // client will expect this id
 
-		char sOK[] = "\x07\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
-		sOK[3] = uPacketID;
-
 		// handle auth packet
 		if ( !bAuthed )
 		{
 			bAuthed = true;
-			tOut.SendBytes ( sOK, sizeof(sOK)-1 );
+			SendMysqlOkPacket ( tOut, uPacketID );
 			continue;
 		}
 
@@ -6236,8 +6271,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 		{
 			if ( tLastMeta.m_sWarning.IsEmpty() )
 			{
-				sOK[3] = uPacketID;
-				tOut.SendBytes ( sOK, sizeof(sOK)-1 );
+				SendMysqlOkPacket ( tOut, uPacketID );
 				continue;
 			}
 
@@ -6481,7 +6515,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 
 				// do add
 				if ( !pIndex->AddDocument ( dFields.GetLength(), dFields.Begin(), tDoc, eStmt==STMT_REPLACE ) )
-					sError.SetSprintf ( "duplicate id '%d'", tDoc.m_iDocID );
+					sError = pIndex->GetLastError();
 
 				// report error
 				if ( !sError.IsEmpty() )
@@ -6493,12 +6527,11 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 				SendMysqlErrorPacket ( tOut, uPacketID, sError.cstr() );
 				continue;
 			}
-			pIndex->Commit ();
+			if ( bAutoCommit && !bInTransaction )
+				pIndex->Commit ();
 
 			// my OK packet
-			MysqlPack ( sOK+5, tStmt.m_iRowsAffected );
-			tOut.SendBytes ( sOK, sizeof(sOK)-1 );
-			sOK[5] = 0; // restore affected rows for everyone else
+			SendMysqlOkPacket ( tOut, uPacketID, tStmt.m_iRowsAffected );
 			continue;
 		}
 		case STMT_DELETE:
@@ -6519,13 +6552,69 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 				continue;
 			}
 
-			pIndex->DeleteDocument ( tStmt.m_iDeleteID );
-			pIndex->Commit ();
+			if ( !pIndex->DeleteDocument ( tStmt.m_iDeleteID ) )
+			{
+				sError = pIndex->GetLastError();
+				SendMysqlErrorPacket ( tOut, uPacketID, sError.cstr() );
+				continue;
+			}
 
-			tOut.SendBytes ( sOK, sizeof(sOK)-1 ); // FIXME? affected rows
+			if ( bAutoCommit && !bInTransaction )
+				pIndex->Commit ();
+
+			SendMysqlOkPacket ( tOut, uPacketID ); // FIXME? affected rows
 			continue;
 
 		}
+		case STMT_SET:
+			{
+				tStmt.m_sSetName.ToLower();
+				if ( tStmt.m_sSetName=="autocommit" )
+				{
+					bAutoCommit = (tStmt.m_iSetValue==0)?false:true;
+					bInTransaction = false;
+
+					// commit all pending changes
+					if ( bAutoCommit )
+					{
+						ISphRtIndex * pIndex = sphGetCurrentIndexRT();
+						if ( pIndex )
+							pIndex->Commit();
+					}
+
+					SendMysqlOkPacket ( tOut, uPacketID );
+					continue;
+				}
+
+				// unknown variable, return error
+				sError.SetSprintf ( "Unknown variable '%s' in SET statement", tStmt.m_sSetName.cstr() );
+				SendMysqlErrorPacket ( tOut, uPacketID, sError.cstr() );
+				continue;
+			}
+		case STMT_STARTTRANSACTION:
+			{
+				bInTransaction = true;
+				ISphRtIndex * pIndex = sphGetCurrentIndexRT();
+				if ( pIndex )
+					pIndex->Commit();
+				SendMysqlOkPacket ( tOut, uPacketID );
+				continue;
+			}
+		case STMT_COMMIT:
+		case STMT_ROLLBACK:
+			{
+				bInTransaction = false;
+				ISphRtIndex * pIndex = sphGetCurrentIndexRT();
+				if ( pIndex )
+				{
+					if ( eStmt==STMT_COMMIT )
+						pIndex->Commit();
+					else
+						pIndex->RollBack();
+				}
+				SendMysqlOkPacket ( tOut, uPacketID );
+				continue;
+			}
 		default:
 		{
 			sError.SetSprintf ( "internal error: unhandled statement type (value=%d)", eStmt );
@@ -7488,7 +7577,7 @@ ESphAddIndex AddIndex ( const char * szIndexName, const CSphConfigSection & hInd
 		// configure realtime index
 		////////////////////////////
 
-		CSphSchema tSchema;
+		CSphSchema tSchema ( szIndexName );
 		CSphColumnInfo tCol;
 
 		// fields

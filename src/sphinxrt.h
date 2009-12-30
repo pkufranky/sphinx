@@ -28,8 +28,12 @@ public:
 	/// commit pending changes
 	virtual void Commit () = 0;
 
+	/// undo pending changes
+	virtual void RollBack () = 0;
+
 	/// dump index data to disk
 	virtual void DumpToDisk ( const char * sFilename ) = 0;
+
 };
 
 /// initialize subsystem
@@ -40,6 +44,9 @@ void sphRTDone ();
 
 /// RT index factory
 ISphRtIndex * sphCreateIndexRT ( const CSphSchema & tSchema, DWORD uRamSize, const char * sPath );
+
+/// Get current txn index
+ISphRtIndex * sphGetCurrentIndexRT();
 
 #endif // _sphinxrt_
 

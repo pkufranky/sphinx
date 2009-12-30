@@ -47,6 +47,14 @@
 %token	TOK_WEIGHT
 %token	TOK_WITHIN
 %token	TOK_WHERE
+%token	TOK_SET
+%token	TOK_COMMIT
+%token	TOK_ROLLBACK
+%token	TOK_START
+%token	TOK_TRANSACTION
+%token	TOK_BEGIN
+%token	TOK_TRUE
+%token	TOK_FALSE
 
 %type	<m_tInsval>		insert_val
 
@@ -87,11 +95,11 @@ static void AddUintRangeFilter ( SqlParser_t * pParser, const CSphString & sAttr
 
 statement:
 	select_from
-	| show_warnings
-	| show_status
-	| show_meta
+	| show_clause
 	| insert_into
 	| delete_from
+	| set_clause
+	| transact_op
 	;
 
 //////////////////////////////////////////////////////////////////////////
@@ -384,16 +392,52 @@ arglist:
 
 //////////////////////////////////////////////////////////////////////////
 
-show_warnings:
-	TOK_SHOW TOK_WARNINGS		{ pParser->m_pStmt->m_eStmt = STMT_SHOW_WARNINGS; }
+show_clause:
+	TOK_SHOW show_variable
 	;
 
-show_status:
-	TOK_SHOW TOK_STATUS			{ pParser->m_pStmt->m_eStmt = STMT_SHOW_STATUS; }
+show_variable:
+	TOK_WARNINGS			{ pParser->m_pStmt->m_eStmt = STMT_SHOW_WARNINGS; }
+	| TOK_STATUS			{ pParser->m_pStmt->m_eStmt = STMT_SHOW_STATUS; }
+	| TOK_META			{ pParser->m_pStmt->m_eStmt = STMT_SHOW_META; }
 	;
 
-show_meta:
-	TOK_SHOW TOK_META			{ pParser->m_pStmt->m_eStmt = STMT_SHOW_META; }
+//////////////////////////////////////////////////////////////////////////
+
+set_clause:
+	TOK_SET TOK_IDENT '=' boolean_value
+		{
+			pParser->m_pStmt->m_eStmt = STMT_SET;
+			pParser->m_pStmt->m_sSetName = $2.m_sValue;
+			pParser->m_pStmt->m_iSetValue = $4.m_iValue;
+		}
+	;
+
+boolean_value:
+	TOK_TRUE			{ $$.m_iValue = 1; }
+	| TOK_FALSE			{ $$.m_iValue = 0; }
+	| TOK_CONST_INT			
+		{
+			$$ = $1;
+			if ( $$.m_iValue!=0 && $$.m_iValue!=1 )
+			{
+				yyerror ( pParser, "only 0 and 1 could be used as boolean values" );
+				YYERROR;
+			}
+		}
+	;
+
+//////////////////////////////////////////////////////////////////////////
+
+transact_op:
+	TOK_COMMIT				{ pParser->m_pStmt->m_eStmt = STMT_COMMIT; }
+	| TOK_ROLLBACK				{ pParser->m_pStmt->m_eStmt = STMT_ROLLBACK; }
+	| start_transaction			{ pParser->m_pStmt->m_eStmt = STMT_STARTTRANSACTION; }
+	;
+
+start_transaction:
+	TOK_BEGIN
+	| TOK_START TOK_TRANSACTION
 	;
 
 //////////////////////////////////////////////////////////////////////////

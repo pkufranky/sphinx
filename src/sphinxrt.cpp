@@ -729,6 +729,7 @@ public:
 	bool						AddDocument ( const CSphVector<CSphWordHit> & dHits, const CSphMatch & tDoc );
 	bool						DeleteDocument ( SphDocID_t uDoc );
 	void						Commit ();
+	void						RollBack();
 
 	void						DumpToDisk ( const char * sFilename );
 
@@ -896,6 +897,7 @@ bool RtIndex_t::AddDocument ( int iFields, const char ** ppFields, const CSphMat
 				&& !m_pSegments[i]->m_dKlist.BinarySearch ( tDoc.m_iDocID ) )
 		{
 			m_tRwlock.Unlock ();
+			m_sLastError.SetSprintf ( "duplicate id '%d'", tDoc.m_iDocID );
 			return false; // already exists and not deleted; INSERT fails
 		}
 		m_tRwlock.Unlock ();
@@ -925,7 +927,10 @@ RtAccum_t * RtIndex_t::AcquireAccum ()
 	// check that no other index is holding the acc
 	RtAccum_t * pAcc =  (RtAccum_t*) sphThreadGet ( g_tTlsAccumKey );
 	if ( pAcc && pAcc->m_pIndex!=NULL && pAcc->m_pIndex!=this )
+	{
+		m_sLastError.SetSprintf ( "current txn is working with another index ('%s')",pAcc->m_pIndex->m_tSchema.m_sName.cstr() );
 		return NULL;
+	}
 
 	if ( !pAcc )
 	{
@@ -1645,10 +1650,25 @@ void RtIndex_t::Commit ()
 	Verify ( m_tWriterMutex.Unlock() );
 }
 
+void RtIndex_t::RollBack ()
+{
+	RtAccum_t * pAcc = AcquireAccum();
+	if ( !pAcc )
+		return;
+
+	// clean up parts we no longer need
+	pAcc->m_dAccum.Resize ( 0 );
+	pAcc->m_dAccumRows.Resize ( 0 );
+
+	// finish cleaning up and release accumulator
+	pAcc->m_pIndex = NULL;
+	pAcc->m_iAccumDocs = 0;
+	pAcc->m_dAccumKlist.Reset();
+
+}
+
 bool RtIndex_t::DeleteDocument ( SphDocID_t uDoc )
 {
-	m_tKlist.Delete(uDoc);
-
 	RtAccum_t * pAcc = AcquireAccum();
 	if ( pAcc )
 		pAcc->m_dAccumKlist.Add ( uDoc );
@@ -2887,6 +2907,14 @@ bool RtIndex_t::GetKeywords ( CSphVector<CSphKeywordInfo> & dKeywords, const cha
 ISphRtIndex * sphCreateIndexRT ( const CSphSchema & tSchema, DWORD uRamSize, const char * sPath )
 {
 	return new RtIndex_t ( tSchema, uRamSize, sPath );
+}
+
+ISphRtIndex * sphGetCurrentIndexRT()
+{
+	RtAccum_t * pAcc =  (RtAccum_t*) sphThreadGet ( g_tTlsAccumKey );
+	if ( pAcc )
+		return pAcc->m_pIndex;
+	return NULL;
 }
 
 void sphRTInit ()

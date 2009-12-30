@@ -65,13 +65,21 @@
      TOK_WEIGHT = 291,
      TOK_WITHIN = 292,
      TOK_WHERE = 293,
-     TOK_OR = 294,
-     TOK_AND = 295,
-     TOK_NOT = 296,
-     TOK_NE = 297,
-     TOK_GTE = 298,
-     TOK_LTE = 299,
-     TOK_NEG = 300
+     TOK_SET = 294,
+     TOK_COMMIT = 295,
+     TOK_ROLLBACK = 296,
+     TOK_START = 297,
+     TOK_TRANSACTION = 298,
+     TOK_BEGIN = 299,
+     TOK_TRUE = 300,
+     TOK_FALSE = 301,
+     TOK_OR = 302,
+     TOK_AND = 303,
+     TOK_NOT = 304,
+     TOK_NE = 305,
+     TOK_GTE = 306,
+     TOK_LTE = 307,
+     TOK_NEG = 308
    };
 #endif
 #define TOK_IDENT 258
@@ -110,13 +118,21 @@
 #define TOK_WEIGHT 291
 #define TOK_WITHIN 292
 #define TOK_WHERE 293
-#define TOK_OR 294
-#define TOK_AND 295
-#define TOK_NOT 296
-#define TOK_NE 297
-#define TOK_GTE 298
-#define TOK_LTE 299
-#define TOK_NEG 300
+#define TOK_SET 294
+#define TOK_COMMIT 295
+#define TOK_ROLLBACK 296
+#define TOK_START 297
+#define TOK_TRANSACTION 298
+#define TOK_BEGIN 299
+#define TOK_TRUE 300
+#define TOK_FALSE 301
+#define TOK_OR 302
+#define TOK_AND 303
+#define TOK_NOT 304
+#define TOK_NE 305
+#define TOK_GTE 306
+#define TOK_LTE 307
+#define TOK_NEG 308
 
 
 
