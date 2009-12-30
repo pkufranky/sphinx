@@ -5946,37 +5946,37 @@ void SendMysqlEofPacket ( NetOutputBuffer_c & tOut, BYTE uPacketID, int iWarns )
 void * MysqlPack ( void * pBuffer, int iValue )
 {
 	char * pOutput = ( char * ) pBuffer;
-	if ( iValue < 0 )
+	if ( iValue<0 )
 		return ( void * ) pOutput;
 
-	if ( iValue < 251 )
+	if ( iValue<251 )
 	{
-		* pOutput++ = (char)iValue;
+		* pOutput++ = ( char ) iValue;
 		return ( void * ) pOutput;
 	}
-	
+
 	if ( iValue < 0xFFFF )
 	{
 		* pOutput++ = '\xFC';
-		* pOutput++ = (char)iValue;
-		* pOutput++ = (char)(iValue >> 8);
+		* pOutput++ = ( char ) iValue;
+		* pOutput++ = ( char ) ( iValue>>8 );
 		return ( void * ) pOutput;
 	}
-	
+
 	if ( iValue < 0xFFFFFF )
 	{
 		* pOutput++ = '\xFD';
-		* pOutput++ = (char)iValue;
-		* pOutput++ = (char)(iValue >> 8);
-		* pOutput++ = (char)(iValue >> 16);
+		* pOutput++ = ( char ) iValue;
+		* pOutput++ = ( char ) ( iValue>>8 );
+		* pOutput++ = ( char ) ( iValue>>16 );
 		return ( void * ) pOutput;
 	}
 
 	* pOutput++ = '\xFE';
-	* pOutput++ = (char)iValue;
-	* pOutput++ = (char)(iValue >> 8);
-	* pOutput++ = (char)(iValue >> 16);
-	* pOutput++ = (char)(iValue >> 24);
+	* pOutput++ = ( char ) iValue;
+	* pOutput++ = ( char ) ( iValue>>8 );
+	* pOutput++ = ( char ) ( iValue>>16 );
+	* pOutput++ = ( char ) ( iValue>>24 );
 	* pOutput++ = 0;
 	* pOutput++ = 0;
 	* pOutput++ = 0;
@@ -6169,7 +6169,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 							}
 
 							iLen = (BYTE*)p - pLen - 4;
-							MysqlPack(pLen,iLen);
+							MysqlPack ( pLen, iLen );
 							break;
 						}
 
@@ -6475,7 +6475,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 			pIndex->Commit ();
 
 			// my OK packet
-			MysqlPack(sOK+5,tStmt.m_iRowsAffected);
+			MysqlPack ( sOK+5, tStmt.m_iRowsAffected );
 			tOut.SendBytes ( sOK, sizeof(sOK)-1 );
 			sOK[5] = 0; // restore affected rows for everyone else
 			continue;

@@ -1341,20 +1341,20 @@ class SphinxConfig
 		$this->Dump ( $this->_config, $fp, false, $agentid );
 		fclose ( $fp );
 
+		$fp = fopen ( $filename, 'r' );
+		if ( !$fp )
+		{
+			$msg = "Can't open file $filename for reading";
+			return FALSE;
+		}
+
+		$config = fread ( $fp, filesize ( $filename ) );
+		fclose ( $fp );
+
 		// for rt case - extract the schema from the config
 		// and make the new config, making the index as rt instead
 		if ( $this->IsRt() )
 		{
-			$fp = fopen ( $filename, 'r' );
-			if ( !$fp )
-			{
-				$msg = "Can't open file $filename for reading";
-				return FALSE;
-			}
-
-			$config = fread ( $fp, filesize ( $filename ) );
-			fclose ( $fp );
-
 			$pattern = "/.*?(?<body>source\s+(?<srcname>\S*?)(\s*\:\s*(?<parent>\S*?))?\s*\{(?<content>.*?)\})(?<epilog>.*?)/s";
 			preg_match_all ( $pattern, $config, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE );
 			$schemas = array();
@@ -1519,6 +1519,44 @@ class SphinxConfig
 			}
 			fwrite ( $fp, $config );
 			fclose ( $fp );
+		}
+		else // for rt indexes we need to clean up all index files before the run.
+		{
+			$pattern = "/.*?index\s+\S*?(\s*\:\s*\S*?)?\s*\{(?<content>.*?)\}.*?/s";
+			preg_match_all ( $pattern, $config, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE );
+			// parse indexes
+			$indexes = array();
+			foreach ( $matches as $match )
+			{
+				$lines = explode("\n", $match['content'][0]);
+				$path = "";
+				$isrt = false;
+				foreach ($lines as $line)
+				{
+					// skip comment lines (if any)
+					if ( preg_match ( "/\s*#/" , $line ) > 0 )
+						continue;
+					$eq = strpos ( $line,"=" );
+					if ($eq == 0)
+						continue;
+					$key = strtolower ( trim ( substr($line,0,$eq), " \t" ) );
+					$value = trim ( substr($line,$eq+1), " \t" );
+					switch ( $key )
+					{
+						case "type":
+							if ($value=="rt")
+								$isrt = true;
+							break;
+						case "path":
+							$path = $value;
+					}
+					if ( $isrt && $path!="" )
+					{
+						$this->EraseIndexFiles($path);
+						break;
+					}
+				}
+			}
 		}
 		return TRUE;
 	}
