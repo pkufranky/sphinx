@@ -2325,6 +2325,14 @@ typedef void		(*SphErrorCallback_fn) ( const char * );
 /// register application-level internal error callback
 void				sphSetInternalErrorCallback ( SphErrorCallback_fn fnCallback );
 
+/// callback type
+typedef void		( *SphWarningCallback_fn ) ( const char * );
+
+/// register application-level warning callback
+void				sphSetWarningCallback ( SphWarningCallback_fn fnCallback );
+
+void				sphCallWarningCallback ( const char * sFmt, ... );
+
 #endif // _sphinx_
 
 /////////////////////////////////////////////////////////////////////////////

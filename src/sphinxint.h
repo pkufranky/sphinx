@@ -200,6 +200,10 @@ public:
 	void						LateCalc ( CSphMatch & tMatch ) const;
 };
 
+bool sphWriteThrottled ( int iFD, const void * pBuf, int64_t iCount, const char * sName, CSphString & sError );
+
+void SafeClose ( int & iFD );
+
 #endif // _sphinxint_
 
 //

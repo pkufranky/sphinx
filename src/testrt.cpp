@@ -4,6 +4,7 @@
 
 #include "sphinx.h"
 #include "sphinxrt.h"
+#include "sphinxutils.h"
 
 #if USE_WINDOWS
 #include "psapi.h"
@@ -176,8 +177,11 @@ int main ()
 	for ( int i=0; i<tSrcSchema.GetAttrsCount(); i++ )
 		tSchema.AddAttr ( tSrcSchema.GetAttr(i), false );
 
-	sphRTInit ();
-	ISphRtIndex * pIndex = sphCreateIndexRT ( tSchema, 32*1024*1024, "data/dump" );
+	CSphConfigSection tRTConfig;
+	sphRTInit ( tRTConfig );
+	CSphVector< ISphRtIndex * > dTemp;
+	sphReplayBinlog ( dTemp );
+	ISphRtIndex * pIndex = sphCreateIndexRT ( tSchema, "testrt", 32*1024*1024, "data/dump" );
 	pIndex->SetTokenizer ( pTok ); // index will own this pair from now on
 	pIndex->SetDictionary ( pDict );
 	if ( !pIndex->Prealloc ( false, sError ) )

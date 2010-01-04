@@ -1034,7 +1034,10 @@ void TestRT ()
 	{
 		printf ( "testing rt indexing, test %d/%d... ", 1+iPass, iMaxPasses );
 
-		sphRTInit ();
+		CSphConfigSection tRTConfig;
+		sphRTInit ( tRTConfig );
+		CSphVector< ISphRtIndex * > dTemp;
+		sphReplayBinlog ( dTemp );
 
 		CSphString sError;
 		CSphDictSettings tDictSettings;
@@ -1074,7 +1077,7 @@ void TestRT ()
 		for ( int i=0; i<tSrcSchema.GetAttrsCount(); i++ )
 			tSchema.AddAttr ( tSrcSchema.GetAttr(i), false );
 
-		ISphRtIndex * pIndex = sphCreateIndexRT ( tSchema, 32*1024*1024, "test_temp" );
+		ISphRtIndex * pIndex = sphCreateIndexRT ( tSchema, "testrt", 32*1024*1024, "test_temp" );
 
 		pIndex->SetTokenizer ( pTok ); // index will own this pair from now on
 		pIndex->SetDictionary ( pDict );

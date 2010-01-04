@@ -34,19 +34,24 @@ public:
 	/// dump index data to disk
 	virtual void DumpToDisk ( const char * sFilename ) = 0;
 
+	/// getter for name
+	virtual const char * GetName () = 0;
 };
 
 /// initialize subsystem
-void sphRTInit ();
+void sphRTInit ( const CSphConfigSection & hSearchd );
 
 /// deinitialize subsystem
 void sphRTDone ();
 
 /// RT index factory
-ISphRtIndex * sphCreateIndexRT ( const CSphSchema & tSchema, DWORD uRamSize, const char * sPath );
+ISphRtIndex * sphCreateIndexRT ( const CSphSchema & tSchema, const char * sIndexName, DWORD uRamSize, const char * sPath );
 
 /// Get current txn index
 ISphRtIndex * sphGetCurrentIndexRT();
+
+/// replay stored binlog
+void sphReplayBinlog ( const CSphVector < ISphRtIndex * > & dRtIndices );
 
 #endif // _sphinxrt_
 

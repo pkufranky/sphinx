@@ -179,8 +179,9 @@ static const int	MIN_READ_BUFFER			= 8192;
 static const int	MIN_READ_UNHINTED		= 1024;
 
 
-static bool					g_bSphQuiet					= false;
-static SphErrorCallback_fn	g_pInternalErrorCallback	= NULL;
+static bool						g_bSphQuiet					= false;
+static SphErrorCallback_fn		g_pInternalErrorCallback	= NULL;
+static SphWarningCallback_fn	g_pInternalWarningCallback	= NULL;
 
 static int					g_iReadBuffer				= DEFAULT_READ_BUFFER;
 static int					g_iReadUnhinted				= DEFAULT_READ_UNHINTED;
@@ -1484,7 +1485,7 @@ static inline void sphThrottleSleep ()
 }
 
 
-static bool sphWriteThrottled ( int iFD, const void * pBuf, int64_t iCount, const char * sName, CSphString & sError )
+bool sphWriteThrottled ( int iFD, const void * pBuf, int64_t iCount, const char * sName, CSphString & sError )
 {
 	if ( iCount<=0 )
 		return true;
@@ -1571,6 +1572,13 @@ size_t sphReadThrottled ( int iFD, void * pBuf, size_t iCount )
 
 	sphThrottleSleep ();
 	return sphRead ( iFD, pBuf, iCount );
+}
+
+void SafeClose ( int & iFD )
+{
+	if ( iFD>=0 )
+		::close ( iFD );
+	iFD = -1;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1771,6 +1779,25 @@ void sphInternalError ( const char * sTemplate, ... )
 void sphSetInternalErrorCallback ( void (*fnCallback) ( const char * ) )
 {
 	g_pInternalErrorCallback = fnCallback;
+}
+
+void sphSetWarningCallback ( SphWarningCallback_fn fnCallback )
+{
+	g_pInternalWarningCallback = fnCallback;
+}
+
+void sphCallWarningCallback ( const char * sFmt, ... )
+{
+	if ( !g_pInternalWarningCallback )
+		return;
+
+	char sBuf [ 1024 ];
+	va_list ap;
+	va_start ( ap, sFmt );
+	vsnprintf ( sBuf, sizeof(sBuf), sFmt, ap );
+	va_end ( ap );
+
+	g_pInternalWarningCallback ( sBuf );
 }
 
 

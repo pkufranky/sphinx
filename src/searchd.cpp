@@ -15,6 +15,7 @@
 #include "sphinxutils.h"
 #include "sphinxexcerpt.h"
 #include "sphinxrt.h"
+#include "sphinxint.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -86,6 +87,7 @@ struct ServedIndex_t
 	bool				m_bToDelete;
 	bool				m_bOnlyNew;
 	int					m_iUpdateTag;
+	bool				m_bRT;
 
 public:
 						ServedIndex_t ();
@@ -385,6 +387,7 @@ void ServedIndex_t::Reset ()
 	m_bToDelete	= false;
 	m_bOnlyNew	= false;
 	m_iUpdateTag= 0;
+	m_bRT		= false;
 }
 
 ServedIndex_t::~ServedIndex_t ()
@@ -620,6 +623,11 @@ void sphLogFatal ( const char * sFmt, ... )
 void LogInternalError ( const char * sError )
 {
 	sphWarning( "INTERNAL ERROR: %s", sError );
+}
+
+void LogWarning ( const char * sWarning )
+{
+	sphWarning ( "%s", sWarning );
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -5748,14 +5756,6 @@ void HandleCommandStatus ( int iSock, int iVer, InputBuffer_c & tReq )
 // GENERAL HANDLER
 /////////////////////////////////////////////////////////////////////////////
 
-void SafeClose ( int & iFD )
-{
-	if ( iFD>=0 )
-		::close ( iFD );
-	iFD = -1;
-}
-
-
 void HandleClientSphinx ( int iSock, const char * sClientIP, int iPipeFD )
 {
 	bool bPersist = false;
@@ -7624,10 +7624,11 @@ ESphAddIndex AddIndex ( const char * szIndexName, const CSphConfigSection & hInd
 
 		// index
 		ServedIndex_t tIdx;
-		tIdx.m_pIndex = sphCreateIndexRT ( tSchema, uRamSize, hIndex["path"].cstr() );
+		tIdx.m_pIndex = sphCreateIndexRT ( tSchema, szIndexName, uRamSize, hIndex["path"].cstr() );
 		tIdx.m_pSchema = tIdx.m_pIndex->GetSchema();
 		tIdx.m_bEnabled = true;
 		tIdx.m_sIndexPath = hIndex["path"];
+		tIdx.m_bRT = true;
 
 		if ( !g_hIndexes.Add ( tIdx, szIndexName ) )
 		{
@@ -9278,7 +9279,7 @@ int WINAPI ServiceMain ( int argc, char **argv )
 	// startup
 	///////////
 
-	sphRTInit();
+	sphRTInit ( hSearchd );
 
 	// handle my signals
 	SetSignalHandlers ();
@@ -9445,6 +9446,7 @@ int WINAPI ServiceMain ( int argc, char **argv )
 #endif
 
 	sphSetInternalErrorCallback ( LogInternalError );
+	sphSetWarningCallback ( LogWarning );
 	sphSetReadBuffers ( hSearchd.GetSize ( "read_buffer", 0 ), hSearchd.GetSize ( "read_unhinted", 0 ) );
 
 	CSphProcessSharedMutex * pAcceptMutex = NULL;
@@ -9464,6 +9466,21 @@ int WINAPI ServiceMain ( int argc, char **argv )
 	if ( g_eWorkers==MPM_THREADS )
 		if ( !g_tThdMutex.Init () )
 			sphDie ( "failed to init thdmutex" );
+
+	// prepare data and replay last binlog
+	CSphVector< ISphRtIndex * > dRtIndices;
+	g_hIndexes.IterateStart ();
+	while ( g_hIndexes.IterateNext () )
+	{
+		const ServedIndex_t & tServed = g_hIndexes.IterateGet ();
+		if ( tServed.m_bRT )
+		{
+			ISphRtIndex * pRt = dynamic_cast < ISphRtIndex * > ( tServed.m_pIndex );
+			assert ( pRt );
+			dRtIndices.Add ( pRt );
+		}
+	}
+	sphReplayBinlog ( dRtIndices );
 
 	for ( ;; )
 	{
