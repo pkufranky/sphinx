@@ -208,6 +208,7 @@ int main ( int argc, char ** argv )
 		#if USE_MYSQL
 		MYSQL tSqlDriver;
 		const char * sQueryInfo = NULL;
+		const char * sQueryPre = NULL;
 
 		while ( !bNoInfo )
 		{
@@ -222,6 +223,8 @@ int main ( int argc, char ** argv )
 			}
 
 			sQueryInfo = hSource["sql_query_info"].cstr();
+			if (hSource.Exists("sql_query_pre"))
+				sQueryPre = hSource["sql_query_pre"].cstr();
 			if ( !strstr ( sQueryInfo, "$id" ) )
 				sphDie ( "'sql_query_info' value must contain '$id'" );
 
@@ -397,6 +400,14 @@ int main ( int argc, char ** argv )
 					#define LOC_MYSQL_ERROR(_arg) { sError = _arg; break; }
 					for ( ;; )
 					{
+						if (sQueryPre)
+						{
+							if ( mysql_query ( &tSqlDriver, sQueryPre ) )
+								LOC_MYSQL_ERROR ( "mysql_query" );
+							MYSQL_RES * pSqlResult = mysql_use_result ( &tSqlDriver );
+							mysql_free_result ( pSqlResult );
+						}
+
 						if ( mysql_query ( &tSqlDriver, sQuery ) )
 							LOC_MYSQL_ERROR ( "mysql_query" );
 
