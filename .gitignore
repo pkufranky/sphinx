@@ -1,0 +1,17 @@
+.svn/
+bin/
+*.user
+junk/
+*.suo
+*.ncb
+Makefile
+config.status
+config.log
+sphinx-min.conf.dist
+sphinx.conf.dist
+config/*
+*.Po
+test/*/report.txt
+codeblocks/*.depend
+codeblocks/*.layout
+*/sphinxversion.h
