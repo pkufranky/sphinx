@@ -15,3 +15,10 @@ test/*/report.txt
 codeblocks/*.depend
 codeblocks/*.layout
 */sphinxversion.h
+src/indexer
+src/indextool
+src/libsphinx.a
+src/search
+src/searchd
+src/spelldump
+src/tests
