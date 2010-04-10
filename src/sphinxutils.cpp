@@ -188,6 +188,7 @@ static KeyDesc_t g_dKeysIndex[] =
 	{ "wordforms",				0, NULL },
 	{ "min_word_len",			0, NULL },
 	{ "charset_type",			0, NULL },
+	{ "chinese_dictionary",			0, NULL },
 	{ "charset_table",			0, NULL },
 	{ "ignore_chars",			0, NULL },
 	{ "min_prefix_len",			0, NULL },
@@ -802,9 +803,9 @@ bool sphConfTokenizer ( const CSphConfigSection & hIndex, CSphTokenizerSettings 
 
 	} else if ( hIndex["charset_type"]=="utf-8" )
 	{
-		tSettings.m_iType = hIndex("ngram_chars") ? TOKENIZER_NGRAM : TOKENIZER_UTF8;
-
-	} else
+		tSettings.m_iType = hIndex("chinese_dictionary") ? TOKENIZER_CHINESE:( hIndex("ngram_chars") ? TOKENIZER_NGRAM : TOKENIZER_UTF8 );
+	}
+	else
 	{
 		sError.SetSprintf ( "unknown charset type '%s'", hIndex["charset_type"].cstr() );
 		return false;
@@ -814,6 +815,7 @@ bool sphConfTokenizer ( const CSphConfigSection & hIndex, CSphTokenizerSettings 
 	tSettings.m_iMinWordLen = Max ( hIndex.GetInt ( "min_word_len" ), 0 );
 	tSettings.m_sNgramChars = hIndex.GetStr ( "ngram_chars" );
 	tSettings.m_iNgramLen = Max ( hIndex.GetInt ( "ngram_len" ), 0 );
+	tSettings.m_sChineseDictionary = hIndex.GetStr( "chinese_dictionary" );
 	tSettings.m_sSynonymsFile = hIndex.GetStr ( "exceptions" ); // new option name
 	if ( tSettings.m_sSynonymsFile.IsEmpty() )
 		tSettings.m_sSynonymsFile = hIndex.GetStr ( "synonyms" ); // deprecated option name

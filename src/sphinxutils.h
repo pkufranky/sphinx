@@ -126,6 +126,7 @@ enum
 	TOKENIZER_SBCS		= 1,
 	TOKENIZER_UTF8		= 2,
 	TOKENIZER_NGRAM	= 3
+	,TOKENIZER_CHINESE	= 4
 };
 
 /// load config file
