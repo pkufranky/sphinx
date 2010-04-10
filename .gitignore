@@ -22,3 +22,4 @@ src/search
 src/searchd
 src/spelldump
 src/tests
+src/mkdict
