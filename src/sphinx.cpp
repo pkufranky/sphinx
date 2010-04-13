@@ -14046,7 +14046,7 @@ int ExtRanker_ProximityBM25_c::GetMatches ( int iFields, const int * pWeights )
 				DWORD uRank = 0;
 				for ( int i=0; i<iFields; i++ )
 				{
-					uRank += uLCS[i]*pWeights[i];
+					uRank += uLCS[i]*uLCS[i]*pWeights[i];
 					uLCS[i] = 0;
 				}
 
