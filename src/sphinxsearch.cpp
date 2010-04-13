@@ -3887,7 +3887,8 @@ struct RankerState_Proximity_fn
 		DWORD uRank = 0;
 		for ( int i=0; i<m_iFields; i++ )
 		{
-			uRank += m_uLCS[i]*m_pWeights[i];
+			BYTE w = m_uLCS[i];
+			uRank += w * m_uLCS[i]*m_pWeights[i];
 			m_uLCS[i] = 0;
 		}
 
