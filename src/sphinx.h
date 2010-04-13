@@ -251,6 +251,11 @@ inline int sphIsAttr ( int c )
 	return ( c>='0' && c<='9' ) || ( c>='a' && c<='z' ) || ( c>='A' && c<='Z' ) || c=='_';
 }
 
+/// UTF-8 sequence length table
+extern const unsigned char * UTF8_CHAR_LEN_TABLE;
+
+/// Chinese dictionary for segmentation
+extern void * g_pChineseDictionary;
 /////////////////////////////////////////////////////////////////////////////
 // TOKENIZERS
 /////////////////////////////////////////////////////////////////////////////
@@ -350,7 +355,7 @@ struct CSphTokenizerSettings
 	CSphString			m_sIgnoreChars;
 	int					m_iNgramLen;
 	CSphString			m_sNgramChars;
-
+	CSphString 			m_sChineseDictionary;
 						CSphTokenizerSettings ();
 };
 
@@ -386,6 +391,9 @@ public:
 
 	/// set n-gram length (for CJK n-gram indexing)
 	virtual void					SetNgramLen ( int ) {}
+
+	/// set Chinese dictionary (for Chinese segmentation and indexing) by SZG 20090408
+	virtual bool					SetChineseDictionary ( const char *, CSphString & ) { return true; }
 
 	/// load synonyms list
 	virtual bool					LoadSynonyms ( const char * sFilename, CSphString & sError ) = 0;
