@@ -492,6 +492,9 @@ ISphTokenizer *			sphCreateSBCSTokenizer ();
 /// create UTF-8 tokenizer
 ISphTokenizer *			sphCreateUTF8Tokenizer ();
 
+/// create UTF-8 chinese tokenizer
+ISphTokenizer * sphCreateUTF8ChineseTokenizer ();
+
 /// create UTF-8 tokenizer with n-grams support (for CJK n-gram indexing)
 ISphTokenizer *			sphCreateUTF8NgramTokenizer ();
 
